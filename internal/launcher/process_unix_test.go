@@ -47,6 +47,10 @@ func runLauncherHelper(mode string) {
 		helperStatusFile = os.NewFile(3, "process-group-status")
 		_, _ = fmt.Fprintf(helperStatusFile, "%d\n", os.Getpid())
 		waitForever()
+	case "pdeathsig-parent":
+		helperPdeathsigParent()
+	case "pdeathsig-child":
+		waitForever()
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "unknown launcher helper mode %q\n", mode)
 		os.Exit(2)
@@ -64,6 +68,21 @@ func helperProcessGroupLeader() {
 	}
 	_ = status.Close()
 	_ = cmd.Wait()
+}
+
+func helperPdeathsigParent() {
+	helpStatus := os.NewFile(3, "pdeathsig-status")
+	cmd := exec.CommandContext(context.Background(), os.Args[0])
+	cmd.Env = launcherHelperEnv("pdeathsig-child")
+	cmd.ExtraFiles = []*os.File{helpStatus}
+	_, _, err := startProcess(cmd)
+	if err != nil {
+		_, _ = fmt.Fprintf(helpStatus, "error: %v\n", err)
+		return
+	}
+
+	_, _ = fmt.Fprintf(helpStatus, "%d\n", cmd.Process.Pid)
+	os.Exit(0)
 }
 
 func launcherHelperEnv(mode string) []string {

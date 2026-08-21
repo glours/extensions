@@ -14,16 +14,6 @@ type processGroupLifetime struct{}
 
 func (processGroupLifetime) Close() error { return nil }
 
-func startProcess(cmd *exec.Cmd) (processLifetime, <-chan error, error) {
-	configureProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		return nil, nil, err
-	}
-	wait := make(chan error, 1)
-	go func() { wait <- reapProcess(cmd) }()
-	return processGroupLifetime{}, wait, nil
-}
-
 func configureProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
