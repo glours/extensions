@@ -247,9 +247,9 @@ func TestStopProcessSignalledExitIsNotAnError(t *testing.T) {
 		t.Skip("no signal semantics to assert on Windows")
 	}
 	cmd := exec.Command("sleep", "60")
-	assert.NilError(t, cmd.Start())
-	wait := make(chan error, 1)
-	go func() { wait <- cmd.Wait() }()
+	lifetime, wait, err := startProcess(cmd)
+	assert.NilError(t, err)
+	defer func() { assert.NilError(t, lifetime.Close()) }()
 
 	assert.NilError(t, stopProcess(context.Background(), cmd, wait, 5*time.Second))
 }
@@ -259,9 +259,9 @@ func TestStopProcessAfterSelfExit(t *testing.T) {
 		t.Skip("zombies are a unix concept")
 	}
 	cmd := exec.Command("sleep", "0.05")
-	assert.NilError(t, cmd.Start())
-	wait := make(chan error, 1)
-	go func() { wait <- cmd.Wait() }()
+	lifetime, wait, err := startProcess(cmd)
+	assert.NilError(t, err)
+	defer func() { assert.NilError(t, lifetime.Close()) }()
 	time.Sleep(500 * time.Millisecond) // let it exit and be reaped
 
 	done := make(chan error, 1)

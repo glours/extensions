@@ -111,17 +111,13 @@ func (l Launcher) Launch(ctx context.Context, bin string) (*Launched, error) {
 		return nil, fmt.Errorf("open extension stderr: %w", err)
 	}
 	go logOutput(ctx, name, stderr)
-	lifetime, err := startProcess(cmd)
+	lifetime, wait, err := startProcess(cmd)
 	if err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = stderr.Close()
 		return nil, fmt.Errorf("start extension %q: %w", name, err)
 	}
-	// Reap the child immediately. Later shutdown reads this channel because Wait
-	// may only be called once.
-	wait := make(chan error, 1)
-	go func() { wait <- cmd.Wait() }()
 	stop := func() {
 		_ = stopProcess(context.Background(), cmd, wait, shutdownTimeout)
 		_ = lifetime.Close()

@@ -59,10 +59,10 @@ func stopProcess(ctx context.Context, cmd *exec.Cmd, done <-chan error, timeout 
 	}
 
 	// Ask the extension to stop. If signaling is unsupported, fall back to Kill.
-	if err := cmd.Process.Signal(shutdownSignal()); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := signalProcess(cmd, shutdownSignal()); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		// os.ErrProcessDone means it already exited, which is the stop we
 		// wanted; any other Kill error means we failed to stop it, so report it.
-		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+		if killErr := killProcess(cmd); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 			return fmt.Errorf("kill extension after failed signal %v: %w", err, killErr)
 		}
 		<-done
@@ -74,7 +74,7 @@ func stopProcess(ctx context.Context, cmd *exec.Cmd, done <-chan error, timeout 
 	case err := <-done:
 		return stopErr(err)
 	case <-shutdownCtx.Done():
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := killProcess(cmd); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
 		}
 		<-done

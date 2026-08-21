@@ -17,14 +17,14 @@ type windowsProcessLifetime struct {
 	job windows.Handle
 }
 
-func startProcess(cmd *exec.Cmd) (processLifetime, error) {
+func startProcess(cmd *exec.Cmd) (processLifetime, <-chan error, error) {
 	lifetime, err := newWindowsProcessLifetime()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := cmd.Start(); err != nil {
 		_ = lifetime.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	if err := lifetime.assign(cmd.Process.Pid); err != nil {
 		if killErr := cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
@@ -34,10 +34,16 @@ func startProcess(cmd *exec.Cmd) (processLifetime, error) {
 		if closeErr := lifetime.Close(); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
-		return nil, fmt.Errorf("assign extension process to job: %w", err)
+		return nil, nil, fmt.Errorf("assign extension process to job: %w", err)
 	}
-	return lifetime, nil
+	wait := make(chan error, 1)
+	go func() { wait <- cmd.Wait() }()
+	return lifetime, wait, nil
 }
+
+func signalProcess(cmd *exec.Cmd, sig os.Signal) error { return cmd.Process.Signal(sig) }
+
+func killProcess(cmd *exec.Cmd) error { return cmd.Process.Kill() }
 
 func newWindowsProcessLifetime() (*windowsProcessLifetime, error) {
 	job, err := windows.CreateJobObject(nil, nil)
