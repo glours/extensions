@@ -1,7 +1,10 @@
 package launcher
 
 import (
+	"bufio"
 	"context"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,12 +13,112 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/log"
 	"github.com/moby/extensions"
 	echov1 "github.com/moby/extensions/internal/launcher/echo/v1"
 	echopb "github.com/moby/extensions/internal/launcher/echo/v1/protogen"
+	"github.com/moby/extensions/sdk/sdkapi"
+	sdkapipb "github.com/moby/extensions/sdk/sdkapi/protogen"
+	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
+
+type messageHook struct {
+	messages []string
+}
+
+func (*messageHook) Levels() []logrus.Level {
+	return logrus.AllLevels
+}
+
+func (h *messageHook) Fire(entry *logrus.Entry) error {
+	h.messages = append(h.messages, entry.Message)
+	return nil
+}
+
+type initializeContextServer struct {
+	hasDeadline chan bool
+}
+
+func (initializeContextServer) Describe(context.Context, *sdkapi.DescribeRequest) (*sdkapi.DescribeResponse, error) {
+	return &sdkapi.DescribeResponse{}, nil
+}
+
+func (s initializeContextServer) Initialize(ctx context.Context, _ *sdkapi.InitializeRequest) (*sdkapi.InitializeResponse, error) {
+	_, hasDeadline := ctx.Deadline()
+	s.hasDeadline <- hasDeadline
+	return &sdkapi.InitializeResponse{}, nil
+}
+
+func TestLaunchedInitializeUsesCallerContext(t *testing.T) {
+	t.Parallel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	recorder := &initializeContextServer{hasDeadline: make(chan bool, 1)}
+	sdkapipb.RegisterServer(server, recorder)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+
+	conn, err := grpc.NewClient("passthrough:///initialize",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+	)
+	assert.NilError(t, err)
+	t.Cleanup(func() { assert.NilError(t, conn.Close()) })
+
+	launched := &Launched{Conn: conn}
+	assert.NilError(t, launched.Initialize(context.Background()))
+	assert.Equal(t, <-recorder.hasDeadline, false)
+}
+
+func TestLogOutputChunksLongRecords(t *testing.T) {
+	t.Parallel()
+
+	hook := &messageHook{}
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	logger.AddHook(hook)
+	ctx := log.WithLogger(context.Background(), logrus.NewEntry(logger))
+
+	first := strings.Repeat("a", maxOutputRecordSize-1) + "\r"
+	second := strings.Repeat("b", maxOutputRecordSize)
+	logOutput(ctx, "test", strings.NewReader(first+second+"tail\r"))
+
+	assert.Check(t, is.DeepEqual(hook.messages, []string{first, second, "tail"}))
+	for _, message := range hook.messages {
+		assert.Check(t, len(message) <= maxOutputRecordSize, "log record is %d bytes", len(message))
+	}
+}
+
+func TestLogOutputPreservesLines(t *testing.T) {
+	t.Parallel()
+
+	hook := &messageHook{}
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	logger.AddHook(hook)
+	ctx := log.WithLogger(context.Background(), logrus.NewEntry(logger))
+
+	logOutput(ctx, "test", strings.NewReader("first\r\nsecond\n\nfinal\r"))
+
+	assert.Check(t, is.DeepEqual(hook.messages, []string{"first", "second", "", "final"}))
+}
+
+func TestWaitReadyRejectsOversizedAcknowledgement(t *testing.T) {
+	t.Parallel()
+
+	input := strings.Repeat("x", maxOutputRecordSize+1) + "\n"
+	reader := bufio.NewReaderSize(strings.NewReader(input), maxOutputRecordSize)
+	err := waitReady(context.Background(), io.NopCloser(strings.NewReader("")), reader)
+	assert.ErrorContains(t, err, "readiness acknowledgement exceeds 16384 bytes")
+}
 
 func exeName(name string) string {
 	if runtime.GOOS == "windows" {

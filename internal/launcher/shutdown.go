@@ -2,19 +2,21 @@ package launcher
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/containerd/log"
 	"google.golang.org/grpc"
 )
+
+const maxOutputRecordSize = 16 * 1024
 
 type processLifetime interface {
 	Close() error
@@ -80,16 +82,20 @@ func stopProcess(ctx context.Context, cmd *exec.Cmd, done <-chan error, timeout 
 	}
 }
 
-// logOutput drains extension output at info level. A bufio.Reader avoids the
-// scanner token limit, which could otherwise block the extension on a full pipe.
+// logOutput drains extension output at info level in bounded records.
 func logOutput(ctx context.Context, name string, r io.Reader) {
-	br := bufio.NewReader(r)
+	br := bufio.NewReaderSize(r, maxOutputRecordSize)
 	for {
-		line, err := br.ReadString('\n')
-		if line != "" {
-			log.G(ctx).WithField("extension", name).Info(strings.TrimRight(line, "\r\n"))
+		record, err := br.ReadSlice('\n')
+		if len(record) != 0 {
+			// ErrBufferFull marks an arbitrary chunk boundary, not the end of a
+			// record. Preserve every byte at that boundary.
+			if !errors.Is(err, bufio.ErrBufferFull) {
+				record = bytes.TrimRight(record, "\r\n")
+			}
+			log.G(ctx).WithField("extension", name).Info(string(record))
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
 			return
 		}
 	}

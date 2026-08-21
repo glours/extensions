@@ -132,16 +132,30 @@ func (l Launcher) Launch(ctx context.Context, bin string) (*Launched, error) {
 		Config:           l.ExtensionConfig[extensions.ExtensionID(name)],
 		CallbackEndpoint: l.CallbackEndpoint,
 	}
-	if err := json.NewEncoder(stdin).Encode(startup); err != nil {
-		stop()
-		return nil, fmt.Errorf("write startup config for extension %q: %w", name, err)
-	}
-	_ = stdin.Close()
-
-	readyCtx, cancel := context.WithTimeout(ctx, readyTimeout)
+	launchCtx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
-	stdoutBuf := bufio.NewReader(stdout)
-	if err := waitReady(readyCtx, stdout, stdoutBuf); err != nil {
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- json.NewEncoder(stdin).Encode(startup)
+	}()
+	select {
+	case err := <-writeDone:
+		_ = stdin.Close()
+		if err != nil {
+			stop()
+			return nil, fmt.Errorf("write startup config for extension %q: %w", name, err)
+		}
+	case <-launchCtx.Done():
+		// Closing the pipe interrupts Encode if the extension is not reading its
+		// startup configuration. Wait for the writer before reaping the process.
+		_ = stdin.Close()
+		<-writeDone
+		stop()
+		return nil, fmt.Errorf("write startup config for extension %q: %w", name, launchCtx.Err())
+	}
+
+	stdoutBuf := bufio.NewReaderSize(stdout, maxOutputRecordSize)
+	if err := waitReady(launchCtx, stdout, stdoutBuf); err != nil {
 		stop()
 		return nil, fmt.Errorf("wait for extension %q readiness: %w", name, err)
 	}
@@ -154,7 +168,7 @@ func (l Launcher) Launch(ctx context.Context, bin string) (*Launched, error) {
 		stop()
 		return nil, fmt.Errorf("connect to extension %q: %w", name, err)
 	}
-	resp, err := sdkapipb.NewClient(conn).Describe(ctx, &sdkapi.DescribeRequest{})
+	resp, err := sdkapipb.NewClient(conn).Describe(launchCtx, &sdkapi.DescribeRequest{})
 	if err != nil {
 		_ = conn.Close()
 		stop()
@@ -208,14 +222,18 @@ func waitReady(ctx context.Context, stdout io.Closer, r *bufio.Reader) error {
 	}
 	done := make(chan result, 1)
 	go func() {
-		line, err := r.ReadString('\n')
-		done <- result{line: line, err: err}
+		line, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			err = fmt.Errorf("readiness acknowledgement exceeds %d bytes", maxOutputRecordSize)
+		}
+		done <- result{line: string(line), err: err}
 	}()
 	select {
 	case <-ctx.Done():
-		// Closing stdout unblocks ReadString so the goroutine does not outlive this
+		// Closing stdout unblocks ReadSlice so the goroutine does not outlive this
 		// call.
 		_ = stdout.Close()
+		<-done
 		return ctx.Err()
 	case res := <-done:
 		if res.err != nil {
