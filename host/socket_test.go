@@ -57,9 +57,12 @@ func TestPointSocketExposure(t *testing.T) {
 	})
 	assert.NilError(t, err)
 	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
-	assert.Equal(t, publicationIdentity, extensions.ExtensionIdentity{
-		ID:     greeter.ID,
-		Origin: extensions.ExtensionOriginExecutable,
+	assert.DeepEqual(t, publicationIdentity, extensions.ExtensionIdentity{
+		ID: greeter.ID,
+		Origin: extensions.ExtensionOrigin{
+			Kind:       extensions.ExtensionOriginExecutable,
+			Executable: &extensions.ExecutableOrigin{Path: bin},
+		},
 	})
 	assert.Equal(t, providerPolicyCalls, 0,
 		"an offered-only process Point must not be governed by provider policy")
@@ -150,7 +153,7 @@ func TestInProcessPointExposure(t *testing.T) {
 	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
 	assert.Equal(t, publicationIdentity, extensions.ExtensionIdentity{
 		ID:     greeter.ID,
-		Origin: extensions.ExtensionOriginBuiltin,
+		Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin},
 	})
 	assert.DeepEqual(t, h.PublishedServicesForPoint(greeterv0.Point.ID()), map[extensions.ExtensionID][]string{
 		greeter.ID: {"org.mobyproject.extension.example.greeter.v0.Greeter"},

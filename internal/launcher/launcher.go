@@ -39,6 +39,7 @@ type Launcher struct {
 // Launched is a started out-of-process extension and its connection.
 type Launched struct {
 	ID           extensions.ExtensionID
+	Path         string
 	Dependencies []extensions.Dependency
 	Conflicts    []extensions.ExtensionID
 	Points       []LaunchedPoint
@@ -178,6 +179,7 @@ func (l Launcher) Launch(ctx context.Context, bin string) (*Launched, error) {
 	}
 	launched := &Launched{
 		ID:               decl.ID,
+		Path:             bin,
 		Dependencies:     decl.Dependencies,
 		Conflicts:        decl.Conflicts,
 		OfferedPoints:    decl.OfferedPoints,

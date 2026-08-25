@@ -109,6 +109,84 @@ func TestValidateExtensionID(t *testing.T) {
 	}
 }
 
+func TestValidateExtensionIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity ExtensionIdentity
+		wantErr  string
+	}{
+		{
+			name: "valid builtin",
+			identity: ExtensionIdentity{
+				ID:     "org.example.valid.v1",
+				Origin: ExtensionOrigin{Kind: ExtensionOriginBuiltin},
+			},
+		},
+		{
+			name: "valid executable",
+			identity: ExtensionIdentity{
+				ID: "org.example.valid.v1",
+				Origin: ExtensionOrigin{
+					Kind:       ExtensionOriginExecutable,
+					Executable: &ExecutableOrigin{Path: "/test/bin/org.example.valid.v1"},
+				},
+			},
+		},
+		{
+			name:     "missing kind",
+			identity: ExtensionIdentity{ID: "org.example.valid.v1"},
+			wantErr:  "extension origin kind is required",
+		},
+		{
+			name: "unknown kind",
+			identity: ExtensionIdentity{
+				ID:     "org.example.valid.v1",
+				Origin: ExtensionOrigin{Kind: "remote"},
+			},
+			wantErr: `invalid extension origin kind "remote"`,
+		},
+		{
+			name: "builtin with executable payload",
+			identity: ExtensionIdentity{
+				ID: "org.example.valid.v1",
+				Origin: ExtensionOrigin{
+					Kind:       ExtensionOriginBuiltin,
+					Executable: &ExecutableOrigin{Path: "/test/bin/org.example.valid.v1"},
+				},
+			},
+			wantErr: "builtin extension origin must not include executable payload",
+		},
+		{
+			name: "executable missing payload",
+			identity: ExtensionIdentity{
+				ID:     "org.example.valid.v1",
+				Origin: ExtensionOrigin{Kind: ExtensionOriginExecutable},
+			},
+			wantErr: "executable extension origin requires executable payload",
+		},
+		{
+			name: "executable empty path",
+			identity: ExtensionIdentity{
+				ID: "org.example.valid.v1",
+				Origin: ExtensionOrigin{
+					Kind:       ExtensionOriginExecutable,
+					Executable: &ExecutableOrigin{},
+				},
+			},
+			wantErr: "executable origin path is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateExtensionIdentity(tc.identity)
+			if tc.wantErr == "" {
+				assert.NilError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
 func TestSingleSelection(t *testing.T) {
 	stock := callerFunc(func(context.Context) error { return nil })
 	custom := callerFunc(func(context.Context) error { return nil })
@@ -191,6 +269,10 @@ var testPoint = DefinePoint[caller]("org.example.fanout.test.v0")
 
 func resolverOf(providers ...ResolvedProvider) Resolver { return stubResolver{providers: providers} }
 
-func resolvedProvider(id ExtensionID, origin ExtensionOrigin, impl any) ResolvedProvider {
-	return ResolvedProvider{Identity: ExtensionIdentity{ID: id, Origin: origin}, Impl: impl}
+func resolvedProvider(id ExtensionID, origin ExtensionOriginKind, impl any) ResolvedProvider {
+	identity := ExtensionIdentity{ID: id, Origin: ExtensionOrigin{Kind: origin}}
+	if origin == ExtensionOriginExecutable {
+		identity.Origin.Executable = &ExecutableOrigin{Path: "test-executable"}
+	}
+	return ResolvedProvider{Identity: identity, Impl: impl}
 }

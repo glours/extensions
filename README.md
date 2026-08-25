@@ -98,7 +98,7 @@ host-attested extension identity and Point:
 ```go
 AllowPublication: host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 	return identity.ID == "org.example.greeter.v1" &&
-		identity.Origin == extensions.ExtensionOriginExecutable &&
+		identity.Origin.Kind == extensions.ExtensionOriginExecutable &&
 		point == greeterv0.Point.ID()
 }),
 ```

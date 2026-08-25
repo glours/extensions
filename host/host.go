@@ -179,7 +179,10 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 
 	for _, ext := range opts.Extensions {
 		decl := ext.Declaration()
-		identity := extensions.ExtensionIdentity{ID: decl.ID, Origin: extensions.ExtensionOriginBuiltin}
+		identity := extensions.ExtensionIdentity{
+			ID:     decl.ID,
+			Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin},
+		}
 		if err := validateHostIdentity(identity, decl); err != nil {
 			return nil, err
 		}
@@ -278,7 +281,7 @@ func admitProviders(identity extensions.ExtensionIdentity, providers []extension
 			continue
 		}
 		if !policy.Allow(identity, provider.Point) {
-			return fmt.Errorf("extension %q with origin %q is not allowed to provide point %q", identity.ID, identity.Origin, provider.Point)
+			return fmt.Errorf("extension %q with origin %q is not allowed to provide point %q", identity.ID, identity.Origin.Kind, provider.Point)
 		}
 	}
 	return nil
@@ -507,7 +510,13 @@ func hostedExtensionFromLaunched(launched *launcher.Launched) hostedExtension {
 		points = append(points, point.ID)
 	}
 	return hostedExtension{
-		identity:     extensions.ExtensionIdentity{ID: launched.ID, Origin: extensions.ExtensionOriginExecutable},
+		identity: extensions.ExtensionIdentity{
+			ID: launched.ID,
+			Origin: extensions.ExtensionOrigin{
+				Kind:       extensions.ExtensionOriginExecutable,
+				Executable: &extensions.ExecutableOrigin{Path: launched.Path},
+			},
+		},
 		dependencies: launched.Dependencies,
 		conflicts:    launched.Conflicts,
 		points:       points,

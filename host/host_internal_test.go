@@ -64,7 +64,17 @@ func processProbeConfig(probeFile string, failInit bool) map[extensions.Extensio
 }
 
 func executableIdentity(id extensions.ExtensionID) extensions.ExtensionIdentity {
-	return extensions.ExtensionIdentity{ID: id, Origin: extensions.ExtensionOriginExecutable}
+	return executableIdentityAtPath(id, "test-executable")
+}
+
+func executableIdentityAtPath(id extensions.ExtensionID, path string) extensions.ExtensionIdentity {
+	return extensions.ExtensionIdentity{
+		ID: id,
+		Origin: extensions.ExtensionOrigin{
+			Kind:       extensions.ExtensionOriginExecutable,
+			Executable: &extensions.ExecutableOrigin{Path: path},
+		},
+	}
 }
 
 func processProbeAddress(t *testing.T, probeFile string) string {
@@ -197,8 +207,11 @@ func newProviderExtension(id extensions.ExtensionID, point extensions.PointID) e
 
 func registerExecutableForTest(b *broker.Broker, ext extensions.Extension) error {
 	return b.Register(extensions.ExtensionIdentity{
-		ID:     ext.Declaration().ID,
-		Origin: extensions.ExtensionOriginExecutable,
+		ID: ext.Declaration().ID,
+		Origin: extensions.ExtensionOrigin{
+			Kind:       extensions.ExtensionOriginExecutable,
+			Executable: &extensions.ExecutableOrigin{Path: "test-executable"},
+		},
 	}, ext)
 }
 
@@ -243,7 +256,7 @@ func TestServeCallback(t *testing.T) {
 		builtin := newProviderExtension("org.example.builtin.v1", dep)
 		assert.NilError(t, b.Register(extensions.ExtensionIdentity{
 			ID:     builtin.Declaration().ID,
-			Origin: extensions.ExtensionOriginBuiltin,
+			Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin},
 		}, builtin))
 		executable := extensions.New(extensions.Declaration{
 			ID:        "org.example.executable.v1",
@@ -310,7 +323,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 	const point = extensions.PointID("org.example.internal.v1")
 	const id = extensions.ExtensionID("org.example.provider.v1")
 	ext := newProviderExtension(id, point)
-	wantIdentity := extensions.ExtensionIdentity{ID: id, Origin: extensions.ExtensionOriginBuiltin}
+	wantIdentity := extensions.ExtensionIdentity{ID: id, Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin}}
 	var gotIdentity extensions.ExtensionIdentity
 	var gotPoint extensions.PointID
 
@@ -381,6 +394,7 @@ func TestLaunchedExtensionCarriesShutdown(t *testing.T) {
 
 	hosted := hostedExtensionFromLaunched(&launcher.Launched{
 		ID:     "org.example.ext.v1",
+		Path:   "test-executable",
 		Points: []launcher.LaunchedPoint{{ID: point}},
 	})
 	ext, err := extensionFromHosted(hosted, providers)
@@ -413,7 +427,7 @@ func TestProcessResourceCleanup(t *testing.T) {
 		assert.ErrorContains(t, err, `extension "org.example.lifecycle.v1"`)
 		assert.ErrorContains(t, err, `origin "executable"`)
 		assert.ErrorContains(t, err, `point "moby.extensions.internal.launcher.echo.v1"`)
-		assert.Equal(t, gotIdentity, executableIdentity(lifecycleExtensionID))
+		assert.DeepEqual(t, gotIdentity, executableIdentityAtPath(lifecycleExtensionID, bin))
 		assertProcessReleased(t, probeFile)
 	})
 
@@ -648,7 +662,7 @@ func TestInProcessPublicationValidation(t *testing.T) {
 			servicev0.Offer(pointDefinition),
 		},
 	})
-	identity := extensions.ExtensionIdentity{ID: ext.Declaration().ID, Origin: extensions.ExtensionOriginBuiltin}
+	identity := extensions.ExtensionIdentity{ID: ext.Declaration().ID, Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin}}
 	allow := PublicationPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return true })
 	deny := PublicationPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return false })
 
@@ -693,7 +707,7 @@ func TestInProcessPublicationValidation(t *testing.T) {
 				servicev0.Offer(pointDefinition),
 			},
 		})
-		otherIdentity := extensions.ExtensionIdentity{ID: other.Declaration().ID, Origin: extensions.ExtensionOriginBuiltin}
+		otherIdentity := extensions.ExtensionIdentity{ID: other.Declaration().ID, Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin}}
 		_, err = collectInProcessPublications(otherIdentity, other, allow, servers, published, owners, nil)
 		assert.ErrorContains(t, err, `extensions "org.example.extension.v1" and "org.example.other.v1" both publish gRPC service "example.API"`)
 	})

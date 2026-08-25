@@ -227,6 +227,7 @@ func TestLaunchOutOfProcess(t *testing.T) {
 	defer func() { assert.NilError(t, launched.Close(context.Background())) }()
 
 	assert.Equal(t, launched.ID, extensions.ExtensionID(id))
+	assert.Equal(t, launched.Path, bin)
 	assert.Check(t, is.Len(launched.Points, 2))
 	assert.Equal(t, launched.Points[0].ID, echov1.Point.ID())
 	assert.DeepEqual(t, launched.OfferedPoints, []extensions.PointID{echov1.Point.ID()})

@@ -17,8 +17,11 @@ func (pingProvider) Ping(context.Context) error { return nil }
 
 func registerExecutable(b *Broker, ext extensions.Extension) error {
 	return b.Register(extensions.ExtensionIdentity{
-		ID:     ext.Declaration().ID,
-		Origin: extensions.ExtensionOriginExecutable,
+		ID: ext.Declaration().ID,
+		Origin: extensions.ExtensionOrigin{
+			Kind:       extensions.ExtensionOriginExecutable,
+			Executable: &extensions.ExecutableOrigin{Path: "test-executable"},
+		},
 	}, ext)
 }
 
@@ -202,9 +205,12 @@ func TestTypedPointLookup(t *testing.T) {
 	providers, err := point.All(b)
 	assert.NilError(t, err)
 	assert.Equal(t, len(providers), 2)
-	assert.Equal(t, providers[0].Identity, extensions.ExtensionIdentity{
-		ID:     "org.test.first.v1",
-		Origin: extensions.ExtensionOriginExecutable,
+	assert.DeepEqual(t, providers[0].Identity, extensions.ExtensionIdentity{
+		ID: "org.test.first.v1",
+		Origin: extensions.ExtensionOrigin{
+			Kind:       extensions.ExtensionOriginExecutable,
+			Executable: &extensions.ExecutableOrigin{Path: "test-executable"},
+		},
 	})
 	assert.Equal(t, providers[0].Impl, first)
 
@@ -349,8 +355,17 @@ func TestProviderIdentity(t *testing.T) {
 		ID:        "org.example.custom.v1",
 		Providers: []extensions.Provider{{Point: point, Impl: custom}},
 	})
-	stockIdentity := extensions.ExtensionIdentity{ID: "org.mobyproject.stock.v1", Origin: extensions.ExtensionOriginBuiltin}
-	customIdentity := extensions.ExtensionIdentity{ID: "org.example.custom.v1", Origin: extensions.ExtensionOriginExecutable}
+	stockIdentity := extensions.ExtensionIdentity{
+		ID:     "org.mobyproject.stock.v1",
+		Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin},
+	}
+	customIdentity := extensions.ExtensionIdentity{
+		ID: "org.example.custom.v1",
+		Origin: extensions.ExtensionOrigin{
+			Kind:       extensions.ExtensionOriginExecutable,
+			Executable: &extensions.ExecutableOrigin{Path: "test-executable"},
+		},
+	}
 
 	t.Run("origin is recorded at registration", func(t *testing.T) {
 		b := New()
@@ -390,10 +405,10 @@ func TestRegisterRejectsInvalidIdentityWithoutMutation(t *testing.T) {
 		identity extensions.ExtensionIdentity
 		wantErr  string
 	}{
-		{name: "empty origin", identity: extensions.ExtensionIdentity{ID: "org.example.valid.v1"}, wantErr: "extension origin is required"},
-		{name: "unknown origin", identity: extensions.ExtensionIdentity{ID: "org.example.valid.v1", Origin: "remote"}, wantErr: `invalid extension origin "remote"`},
-		{name: "invalid id", identity: extensions.ExtensionIdentity{ID: "invalid", Origin: extensions.ExtensionOriginExecutable}, wantErr: `invalid extension id "invalid"`},
-		{name: "declaration mismatch", identity: extensions.ExtensionIdentity{ID: "org.example.other.v1", Origin: extensions.ExtensionOriginExecutable}, wantErr: `identity id "org.example.other.v1" does not match declared id "org.example.valid.v1"`},
+		{name: "empty origin", identity: extensions.ExtensionIdentity{ID: "org.example.valid.v1"}, wantErr: "extension origin kind is required"},
+		{name: "unknown origin", identity: extensions.ExtensionIdentity{ID: "org.example.valid.v1", Origin: extensions.ExtensionOrigin{Kind: "remote"}}, wantErr: `invalid extension origin kind "remote"`},
+		{name: "invalid id", identity: extensions.ExtensionIdentity{ID: "invalid", Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginExecutable, Executable: &extensions.ExecutableOrigin{Path: "test-executable"}}}, wantErr: `invalid extension id "invalid"`},
+		{name: "declaration mismatch", identity: extensions.ExtensionIdentity{ID: "org.example.other.v1", Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginExecutable, Executable: &extensions.ExecutableOrigin{Path: "test-executable"}}}, wantErr: `identity id "org.example.other.v1" does not match declared id "org.example.valid.v1"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := New()

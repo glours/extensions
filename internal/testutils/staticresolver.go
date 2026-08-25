@@ -44,8 +44,11 @@ func (r StaticResolver) Providers(point extensions.PointID) []extensions.Resolve
 		if id == "" {
 			id = extensions.ExtensionID(fmt.Sprintf("org.example.test%d.v1", len(providers)+1))
 		}
-		if identity.Origin == "" {
-			identity.Origin = extensions.ExtensionOriginExecutable
+		if identity.Origin.Kind == "" {
+			identity.Origin = extensions.ExtensionOrigin{
+				Kind:       extensions.ExtensionOriginExecutable,
+				Executable: &extensions.ExecutableOrigin{Path: "test-executable"},
+			}
 		}
 		identity.ID = id
 		providers = append(providers, extensions.ResolvedProvider{

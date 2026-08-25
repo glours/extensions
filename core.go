@@ -12,16 +12,31 @@ import (
 // ExtensionID identifies a deployable extension.
 type ExtensionID string
 
-// ExtensionOrigin identifies how the host obtained an extension.
-type ExtensionOrigin string
+// ExtensionOriginKind identifies how the host obtained an extension.
+type ExtensionOriginKind string
 
 const (
 	// ExtensionOriginBuiltin identifies an extension compiled into the host.
-	ExtensionOriginBuiltin ExtensionOrigin = "builtin"
+	ExtensionOriginBuiltin ExtensionOriginKind = "builtin"
 	// ExtensionOriginExecutable identifies an extension launched as an
 	// executable.
-	ExtensionOriginExecutable ExtensionOrigin = "executable"
+	ExtensionOriginExecutable ExtensionOriginKind = "executable"
 )
+
+// ExtensionOrigin identifies how the host obtained an extension and its
+// kind-specific attested details.
+type ExtensionOrigin struct {
+	Kind       ExtensionOriginKind
+	Executable *ExecutableOrigin
+}
+
+// ExecutableOrigin contains host-attested details for an executable origin.
+type ExecutableOrigin struct {
+	// Path is the exact path the host executed, as discovered from the
+	// extension directory. It is not normalized: a relative directory or a
+	// symlink yields that relative or symlink path.
+	Path string
+}
 
 // ExtensionIdentity is the host-attested identity of an extension.
 // The extension declares ID, but the host supplies and validates the complete
@@ -37,14 +52,24 @@ func ValidateExtensionIdentity(identity ExtensionIdentity) error {
 	if err := ValidateExtensionID(identity.ID); err != nil {
 		return err
 	}
-	switch identity.Origin {
-	case ExtensionOriginBuiltin, ExtensionOriginExecutable:
-		return nil
+	switch identity.Origin.Kind {
 	case "":
-		return errors.New("extension origin is required")
+		return errors.New("extension origin kind is required")
+	case ExtensionOriginBuiltin:
+		if identity.Origin.Executable != nil {
+			return errors.New("builtin extension origin must not include executable payload")
+		}
+	case ExtensionOriginExecutable:
+		if identity.Origin.Executable == nil {
+			return errors.New("executable extension origin requires executable payload")
+		}
+		if identity.Origin.Executable.Path == "" {
+			return errors.New("executable origin path is required")
+		}
 	default:
-		return fmt.Errorf("invalid extension origin %q: want %q or %q", identity.Origin, ExtensionOriginBuiltin, ExtensionOriginExecutable)
+		return fmt.Errorf("invalid extension origin kind %q: want %q or %q", identity.Origin.Kind, ExtensionOriginBuiltin, ExtensionOriginExecutable)
 	}
+	return nil
 }
 
 // PointID identifies an extension point contract.
@@ -138,7 +163,7 @@ type ResolvedProvider struct {
 func EffectiveProviders(providers []ResolvedProvider) []ResolvedProvider {
 	var executables, builtins []ResolvedProvider
 	for _, p := range providers {
-		if p.Identity.Origin == ExtensionOriginBuiltin {
+		if p.Identity.Origin.Kind == ExtensionOriginBuiltin {
 			builtins = append(builtins, p)
 		} else {
 			executables = append(executables, p)
