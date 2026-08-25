@@ -22,19 +22,26 @@ import (
 	"google.golang.org/grpc"
 )
 
-// PublicationPolicy decides whether one extension's offered Point may be
-// published externally.
-type PublicationPolicy interface {
-	Allow(extension extensions.ExtensionID, point extensions.PointID) bool
+// PointPolicy decides whether an extension identity may use a Point in the way
+// controlled by the policy-bearing option.
+type PointPolicy interface {
+	Allow(identity extensions.ExtensionIdentity, point extensions.PointID) bool
 }
+
+// PointPolicyFunc adapts a function to [PointPolicy].
+type PointPolicyFunc func(identity extensions.ExtensionIdentity, point extensions.PointID) bool
+
+// Allow calls f.
+// A nil function denies the requested Point use.
+func (f PointPolicyFunc) Allow(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+	return f != nil && f(identity, point)
+}
+
+// PublicationPolicy is the policy used for external Point publication.
+type PublicationPolicy = PointPolicy
 
 // PublicationPolicyFunc adapts a function to [PublicationPolicy].
-type PublicationPolicyFunc func(extension extensions.ExtensionID, point extensions.PointID) bool
-
-// Allow calls f. A nil function denies publication.
-func (f PublicationPolicyFunc) Allow(extension extensions.ExtensionID, point extensions.PointID) bool {
-	return f != nil && f(extension, point)
-}
+type PublicationPolicyFunc = PointPolicyFunc
 
 // Options configures a [Host].
 type Options struct {
@@ -48,9 +55,12 @@ type Options struct {
 	// wiring. Unlisted points are rejected unless the extension offered them only
 	// for external publication.
 	ClientProviders []clientpoint.Registration
+	// AllowProvider decides which internally registered providers are admitted.
+	// A nil policy preserves registration of all declared internal providers.
+	AllowProvider PointPolicy
 	// AllowPublication decides which offered Points become externally reachable.
 	// A nil policy denies all publication.
-	AllowPublication PublicationPolicy
+	AllowPublication PointPolicy
 	// PointServers lists generated adapters available for allowed in-process
 	// offers.
 	PointServers []serverpoint.Registration
@@ -69,7 +79,7 @@ type Host struct {
 	broker *broker.Broker
 	// conns holds connections to launched extensions for socket proxying.
 	conns map[extensions.ExtensionID]grpc.ClientConnInterface
-	// loaded owns the resources acquired for installed extensions in load order.
+	// loaded owns resources acquired for executable extensions in load order.
 	loaded []loadedExtension
 	// publishedServices contains only services approved by Host policy.
 	publishedServices map[extensions.ExtensionID]map[extensions.PointID][]string
@@ -80,6 +90,7 @@ type Host struct {
 }
 
 type loadedExtension struct {
+	identity  extensions.ExtensionIdentity
 	extension extensions.Extension
 	close     func(context.Context) error
 }
@@ -87,7 +98,7 @@ type loadedExtension struct {
 // hostedExtension is the runtime-neutral declaration and lifecycle surface
 // needed to adapt an externally hosted extension to the broker.
 type hostedExtension struct {
-	id           extensions.ExtensionID
+	identity     extensions.ExtensionIdentity
 	dependencies []extensions.Dependency
 	conflicts    []extensions.ExtensionID
 	points       []extensions.PointID
@@ -167,12 +178,20 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 	}
 
 	for _, ext := range opts.Extensions {
-		services, err := collectInProcessPublications(ext, opts.AllowPublication, pointServers, publishedServices, publishedOwners, reservedServices)
+		decl := ext.Declaration()
+		identity := extensions.ExtensionIdentity{ID: decl.ID, Origin: extensions.ExtensionOriginBuiltin}
+		if err := validateHostIdentity(identity, decl); err != nil {
+			return nil, err
+		}
+		if err := admitProviders(identity, decl.Providers, opts.AllowProvider); err != nil {
+			return nil, err
+		}
+		services, err := collectInProcessPublications(identity, ext, opts.AllowPublication, pointServers, publishedServices, publishedOwners, reservedServices)
 		if err != nil {
 			return nil, err
 		}
 		inProcessServices = append(inProcessServices, services...)
-		if err := b.RegisterBuiltin(ext); err != nil {
+		if err := b.Register(identity, ext); err != nil {
 			return nil, err
 		}
 	}
@@ -192,13 +211,21 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 				return nil, err
 			}
 			loaded = append(loaded, loadedExt)
-			if err := approveProcessPublications(started, opts.AllowPublication, publishedServices, publishedOwners, reservedServices); err != nil {
+			identity := loadedExt.identity
+			decl := loadedExt.extension.Declaration()
+			if err := validateHostIdentity(identity, decl); err != nil {
 				return nil, err
 			}
-			if err := b.Register(loadedExt.extension); err != nil {
+			if err := admitProviders(identity, decl.Providers, opts.AllowProvider); err != nil {
 				return nil, err
 			}
-			conns[started.ID] = started.Conn
+			if err := approveProcessPublications(identity, started, opts.AllowPublication, publishedServices, publishedOwners, reservedServices); err != nil {
+				return nil, err
+			}
+			if err := b.Register(identity, loadedExt.extension); err != nil {
+				return nil, err
+			}
+			conns[identity.ID] = started.Conn
 		}
 	}
 
@@ -211,7 +238,7 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 		if providers := extensions.EffectiveProviders(b.Providers(point)); len(providers) > 1 {
 			ids := make([]string, len(providers))
 			for i, p := range providers {
-				ids[i] = string(p.Extension)
+				ids[i] = string(p.Identity.ID)
 			}
 			return nil, fmt.Errorf("point %q admits a single provider, but extensions %s all provide it", point, strings.Join(ids, ", "))
 		}
@@ -232,36 +259,58 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 	return &Host{broker: b, conns: conns, loaded: loaded, publishedServices: publishedServices, inProcessServices: inProcessServices, callback: callback}, nil
 }
 
-func approveProcessPublications(started *launcher.Launched, policy PublicationPolicy, published map[extensions.ExtensionID]map[extensions.PointID][]string, owners map[string]extensions.ExtensionID, reserved map[string]bool) error {
-	if policy == nil {
-		return nil
+func validateHostIdentity(identity extensions.ExtensionIdentity, decl extensions.Declaration) error {
+	if err := extensions.ValidateExtensionIdentity(identity); err != nil {
+		return err
 	}
-	for _, point := range started.OfferedPoints {
-		if !policy.Allow(started.ID, point) {
-			continue
-		}
-		names := started.ProviderServices[point]
-		if len(names) == 0 {
-			return fmt.Errorf("extension %q offered point %q without a gRPC service", started.ID, point)
-		}
-		for _, service := range names {
-			if reserved[service] {
-				return fmt.Errorf("extension %q cannot publish reserved gRPC service %q", started.ID, service)
-			}
-			if owner, exists := owners[service]; exists {
-				return fmt.Errorf("extensions %q and %q both publish gRPC service %q", owner, started.ID, service)
-			}
-			owners[service] = started.ID
-		}
-		if published[started.ID] == nil {
-			published[started.ID] = make(map[extensions.PointID][]string)
-		}
-		published[started.ID][point] = append([]string(nil), names...)
+	if identity.ID != decl.ID {
+		return fmt.Errorf("extension identity id %q does not match declared id %q", identity.ID, decl.ID)
 	}
 	return nil
 }
 
-func collectInProcessPublications(ext extensions.Extension, policy PublicationPolicy, servers map[extensions.PointID]serverpoint.Registration, published map[extensions.ExtensionID]map[extensions.PointID][]string, owners map[string]extensions.ExtensionID, reserved map[string]bool) ([]servicegrpc.Service, error) {
+func admitProviders(identity extensions.ExtensionIdentity, providers []extensions.Provider, policy PointPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	for _, provider := range providers {
+		if !policy.Allow(identity, provider.Point) {
+			return fmt.Errorf("extension %q with origin %q is not allowed to provide point %q", identity.ID, identity.Origin, provider.Point)
+		}
+	}
+	return nil
+}
+
+func approveProcessPublications(identity extensions.ExtensionIdentity, started *launcher.Launched, policy PointPolicy, published map[extensions.ExtensionID]map[extensions.PointID][]string, owners map[string]extensions.ExtensionID, reserved map[string]bool) error {
+	if policy == nil {
+		return nil
+	}
+	for _, point := range started.OfferedPoints {
+		if !policy.Allow(identity, point) {
+			continue
+		}
+		names := started.ProviderServices[point]
+		if len(names) == 0 {
+			return fmt.Errorf("extension %q offered point %q without a gRPC service", identity.ID, point)
+		}
+		for _, service := range names {
+			if reserved[service] {
+				return fmt.Errorf("extension %q cannot publish reserved gRPC service %q", identity.ID, service)
+			}
+			if owner, exists := owners[service]; exists {
+				return fmt.Errorf("extensions %q and %q both publish gRPC service %q", owner, identity.ID, service)
+			}
+			owners[service] = identity.ID
+		}
+		if published[identity.ID] == nil {
+			published[identity.ID] = make(map[extensions.PointID][]string)
+		}
+		published[identity.ID][point] = append([]string(nil), names...)
+	}
+	return nil
+}
+
+func collectInProcessPublications(identity extensions.ExtensionIdentity, ext extensions.Extension, policy PointPolicy, servers map[extensions.PointID]serverpoint.Registration, published map[extensions.ExtensionID]map[extensions.PointID][]string, owners map[string]extensions.ExtensionID, reserved map[string]bool) ([]servicegrpc.Service, error) {
 	decl := ext.Declaration()
 	providers := make(map[extensions.PointID]any, len(decl.Providers))
 	for _, provider := range decl.Providers {
@@ -296,7 +345,7 @@ func collectInProcessPublications(ext extensions.Extension, policy PublicationPo
 			if !implemented {
 				return nil, fmt.Errorf("extension %q: offered point %q is not implemented", decl.ID, point)
 			}
-			if policy == nil || !policy.Allow(decl.ID, point) {
+			if policy == nil || !policy.Allow(identity, point) {
 				continue
 			}
 			registration, ok := servers[point]
@@ -347,7 +396,7 @@ func serveCallback(endpoint string, deps []serverpoint.Registration, b *broker.B
 // any gRPC service registrar.
 func registerDependencyProviders(registrar grpc.ServiceRegistrar, deps []serverpoint.Registration, b *broker.Broker) error {
 	for _, dep := range deps {
-		providers := b.Providers(dep.Point)
+		providers := extensions.EffectiveProviders(b.Providers(dep.Point))
 		switch len(providers) {
 		case 0:
 			continue
@@ -416,7 +465,7 @@ func loadProcess(ctx context.Context, l launcher.Launcher, bin string, providers
 	if err != nil {
 		return loadedExtension{}, nil, err
 	}
-	loaded := loadedExtension{extension: ext, close: launched.Close}
+	loaded := loadedExtension{identity: hosted.identity, extension: ext, close: launched.Close}
 	owned = false
 	return loaded, launched, nil
 }
@@ -455,7 +504,7 @@ func hostedExtensionFromLaunched(launched *launcher.Launched) hostedExtension {
 		points = append(points, point.ID)
 	}
 	return hostedExtension{
-		id:           launched.ID,
+		identity:     extensions.ExtensionIdentity{ID: launched.ID, Origin: extensions.ExtensionOriginExecutable},
 		dependencies: launched.Dependencies,
 		conflicts:    launched.Conflicts,
 		points:       points,
@@ -474,7 +523,7 @@ func hostedExtensionFromLaunched(launched *launcher.Launched) hostedExtension {
 // runtime-neutral hosted extension.
 func extensionFromHosted(hosted hostedExtension, providers map[extensions.PointID]clientpoint.Provider) (extensions.Extension, error) {
 	decl := extensions.Declaration{
-		ID:           hosted.id,
+		ID:           hosted.identity.ID,
 		Dependencies: hosted.dependencies,
 		Conflicts:    hosted.conflicts,
 		Init: func(ctx context.Context, config extensions.Config, _ extensions.Resolver) error {
@@ -500,7 +549,7 @@ func extensionFromHosted(hosted hostedExtension, providers map[extensions.PointI
 				continue
 			}
 			// The daemon cannot call an unlisted point.
-			return nil, fmt.Errorf("extension %q declares unsupported point %q", hosted.id, point)
+			return nil, fmt.Errorf("extension %q declares unsupported point %q", hosted.identity.ID, point)
 		}
 		provider := build(hosted.conn)
 		decl.Providers = append(decl.Providers, provider)

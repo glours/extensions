@@ -93,11 +93,13 @@ Providers: []extensions.Provider{
 ```
 
 An offer is not authorization. The Host defaults to deny and applies policy per
-extension and Point:
+host-attested extension identity and Point:
 
 ```go
-AllowPublication: host.PublicationPolicyFunc(func(extension extensions.ExtensionID, point extensions.PointID) bool {
-	return extension == "org.example.greeter.v1" && point == greeterv0.Point.ID()
+AllowPublication: host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+	return identity.ID == "org.example.greeter.v1" &&
+		identity.Origin == extensions.ExtensionOriginExecutable &&
+		point == greeterv0.Point.ID()
 }),
 ```
 
@@ -132,6 +134,7 @@ publication is not part of the extension API.
 |---|---|
 | **Point** | A versioned, namespaced Go interface and message types implemented by extensions. A breaking change gets a new point version; `.v0` is experimental. |
 | **Extension** | A deployable unit, built into the daemon or run as a separate binary, that declares providers, dependencies, and lifecycle. |
+| **Extension identity** | The logical extension id plus the host-attested origin (`builtin` or `executable`). The extension declares only its logical id; the host validates the id and supplies the origin. |
 | **Provider** | An extension's implementation of one point. It has no separate id and is identified by its extension id; an extension implements a point at most once. |
 | **ClientPoint** | Generated host wiring that turns an extension connection into a provider of an ordinary point. |
 | **ServerPoint** | Generated SDK or callback wiring that serves an ordinary point's gRPC service. |

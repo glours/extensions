@@ -90,7 +90,7 @@ func callProvider[T, A any](ctx context.Context, point PointID, policy Policy, p
 	}
 	next, err := fn(ctx, provider.Impl, acc)
 	if err != nil {
-		return acc, policy.wrap(point, provider.Extension, err)
+		return acc, policy.wrap(point, provider.Identity.ID, err)
 	}
 	return next, nil
 }

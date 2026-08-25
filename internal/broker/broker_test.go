@@ -15,12 +15,19 @@ type pingProvider struct{}
 
 func (pingProvider) Ping(context.Context) error { return nil }
 
+func registerExecutable(b *Broker, ext extensions.Extension) error {
+	return b.Register(extensions.ExtensionIdentity{
+		ID:     ext.Declaration().ID,
+		Origin: extensions.ExtensionOriginExecutable,
+	}, ext)
+}
+
 func TestInitOrdersDependencies(t *testing.T) {
 	ctx := context.Background()
 	b := New()
 	var order []extensions.ExtensionID
 
-	err := b.Register(extensions.New(extensions.Declaration{
+	err := registerExecutable(b, extensions.New(extensions.Declaration{
 		ID:        "org.test.dependent.v1",
 		Providers: []extensions.Provider{{Point: "dependent.point", Impl: pingProvider{}}},
 		Dependencies: []extensions.Dependency{
@@ -33,7 +40,7 @@ func TestInitOrdersDependencies(t *testing.T) {
 		},
 	}))
 	assert.NilError(t, err)
-	err = b.Register(extensions.New(extensions.Declaration{
+	err = registerExecutable(b, extensions.New(extensions.Declaration{
 		ID:        "org.test.point-dependency.v1",
 		Providers: []extensions.Provider{{Point: "dependency.point", Impl: pingProvider{}}},
 		Init: func(context.Context, extensions.Config, extensions.Resolver) error {
@@ -42,7 +49,7 @@ func TestInitOrdersDependencies(t *testing.T) {
 		},
 	}))
 	assert.NilError(t, err)
-	err = b.Register(extensions.New(extensions.Declaration{
+	err = registerExecutable(b, extensions.New(extensions.Declaration{
 		ID: "org.test.named-dependency.v1",
 		Init: func(context.Context, extensions.Config, extensions.Resolver) error {
 			order = append(order, "org.test.named-dependency.v1")
@@ -66,7 +73,7 @@ func TestInitOrdersDependencies(t *testing.T) {
 func TestShutdownOrdersDependenciesInReverse(t *testing.T) {
 	b := New()
 	var order []extensions.ExtensionID
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{
 		ID:           "org.test.dependent.v1",
 		Dependencies: []extensions.Dependency{{Extension: "org.test.dependency.v1"}},
 		Shutdown: func(context.Context) error {
@@ -74,7 +81,7 @@ func TestShutdownOrdersDependenciesInReverse(t *testing.T) {
 			return nil
 		},
 	})))
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{
 		ID: "org.test.dependency.v1",
 		Shutdown: func(context.Context) error {
 			order = append(order, "org.test.dependency.v1")
@@ -91,7 +98,7 @@ func TestShutdownOrdersDependenciesInReverse(t *testing.T) {
 func TestShutdownSkipsUninitialized(t *testing.T) {
 	b := New()
 	var shutdown []extensions.ExtensionID
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{
 		ID: "org.test.registered-not-initialized.v1",
 		Shutdown: func(context.Context) error {
 			shutdown = append(shutdown, "org.test.registered-not-initialized.v1")
@@ -112,19 +119,19 @@ func TestShutdownUnwindsPartialInit(t *testing.T) {
 			return nil
 		}
 	}
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{
 		ID:       "org.test.first.v1",
 		Init:     func(context.Context, extensions.Config, extensions.Resolver) error { return nil },
 		Shutdown: shutdownRecorder("org.test.first.v1"),
 	})))
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{
 		ID: "org.test.boom.v1",
 		Init: func(context.Context, extensions.Config, extensions.Resolver) error {
 			return errors.New("init failed")
 		},
 		Shutdown: shutdownRecorder("org.test.boom.v1"),
 	})))
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{
 		ID:       "org.test.last.v1",
 		Init:     func(context.Context, extensions.Config, extensions.Resolver) error { return nil },
 		Shutdown: shutdownRecorder("org.test.last.v1"),
@@ -146,7 +153,7 @@ func TestLookupProviders(t *testing.T) {
 		{ID: "org.test.first.v1", Providers: []extensions.Provider{{Point: "point", Impl: first}}},
 		{ID: "org.test.second.v1", Providers: []extensions.Provider{{Point: "point", Impl: second}}},
 	} {
-		assert.NilError(t, b.Register(extensions.New(ext)))
+		assert.NilError(t, registerExecutable(b, extensions.New(ext)))
 	}
 
 	provider, err := b.Provider("point", "org.test.second.v1")
@@ -156,7 +163,7 @@ func TestLookupProviders(t *testing.T) {
 	assert.Equal(t, len(providers), 2)
 	providerIDs := map[extensions.ExtensionID]bool{}
 	for _, provider := range providers {
-		providerIDs[provider.Extension] = true
+		providerIDs[provider.Identity.ID] = true
 	}
 	assert.Check(t, providerIDs["org.test.first.v1"])
 	assert.Check(t, providerIDs["org.test.second.v1"])
@@ -165,7 +172,7 @@ func TestLookupProviders(t *testing.T) {
 // TestConcurrentAccess exercises concurrent reads and registration.
 func TestConcurrentAccess(t *testing.T) {
 	b := New()
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{
 		ID:        "org.test.a.v1",
 		Providers: []extensions.Provider{{Point: "a.point.v1", Impl: pingProvider{}}},
 	})))
@@ -179,7 +186,7 @@ func TestConcurrentAccess(t *testing.T) {
 		})
 	}
 	wg.Go(func() {
-		_ = b.Register(extensions.New(extensions.Declaration{ID: "org.test.b.v1"}))
+		_ = registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.b.v1"}))
 	})
 	wg.Wait()
 }
@@ -189,13 +196,16 @@ func TestTypedPointLookup(t *testing.T) {
 	b := New()
 	first := pingProvider{}
 	second := pingProvider{}
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{ID: "org.test.first.v1", Providers: []extensions.Provider{point.Provide(first)}})))
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{ID: "org.test.second.v1", Providers: []extensions.Provider{point.Provide(second)}})))
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.first.v1", Providers: []extensions.Provider{point.Provide(first)}})))
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.second.v1", Providers: []extensions.Provider{point.Provide(second)}})))
 
 	providers, err := point.All(b)
 	assert.NilError(t, err)
 	assert.Equal(t, len(providers), 2)
-	assert.Equal(t, providers[0].Extension, extensions.ExtensionID("org.test.first.v1"))
+	assert.Equal(t, providers[0].Identity, extensions.ExtensionIdentity{
+		ID:     "org.test.first.v1",
+		Origin: extensions.ExtensionOriginExecutable,
+	})
 	assert.Equal(t, providers[0].Impl, first)
 
 	provider, err := point.ByExtension(b, "org.test.second.v1")
@@ -208,7 +218,7 @@ func TestTypedPointLookup(t *testing.T) {
 func TestTypedPointLookupRejectsWrongImplementationType(t *testing.T) {
 	point := extensions.DefinePoint[interface{ Ping(context.Context) error }]("test.typed.v1")
 	b := New()
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{ID: "org.test.broken.v1", Providers: []extensions.Provider{{Point: point.ID(), Impl: "not a ping provider"}}})))
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.broken.v1", Providers: []extensions.Provider{{Point: point.ID(), Impl: "not a ping provider"}}})))
 
 	_, err := point.All(b)
 	assert.ErrorContains(t, err, `extension "org.test.broken.v1" provider for point "test.typed.v1" has type string`)
@@ -240,9 +250,9 @@ func TestRegisterRejectsExtensionConflicts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := New()
-			assert.NilError(t, b.Register(extensions.New(extensions.Declaration{ID: "org.test.first.v1", Conflicts: tc.first})))
+			assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.first.v1", Conflicts: tc.first})))
 
-			err := b.Register(extensions.New(extensions.Declaration{ID: "org.test.second.v1", Conflicts: tc.second}))
+			err := registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.second.v1", Conflicts: tc.second}))
 			assert.ErrorContains(t, err, tc.wantErr)
 		})
 	}
@@ -267,7 +277,7 @@ func TestRegisterRejectsInvalidExtensionConflicts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := New()
-			err := b.Register(extensions.New(extensions.Declaration{ID: "org.test.invalid.v1", Conflicts: tc.conflicts}))
+			err := registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.invalid.v1", Conflicts: tc.conflicts}))
 			assert.ErrorContains(t, err, tc.wantErr)
 		})
 	}
@@ -275,7 +285,7 @@ func TestRegisterRejectsInvalidExtensionConflicts(t *testing.T) {
 
 func TestInitFailsForMissingRequiredDependency(t *testing.T) {
 	b := New()
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{ID: "org.test.dependent.v1", Dependencies: []extensions.Dependency{{Point: "missing.point"}}})))
+	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.dependent.v1", Dependencies: []extensions.Dependency{{Point: "missing.point"}}})))
 
 	err := b.Init(context.Background(), nil)
 	assert.ErrorContains(t, err, `requires missing point "missing.point"`)
@@ -284,7 +294,7 @@ func TestInitFailsForMissingRequiredDependency(t *testing.T) {
 func TestInitAllowsMissingOptionalDependency(t *testing.T) {
 	b := New()
 	initialized := false
-	err := b.Register(extensions.New(extensions.Declaration{
+	err := registerExecutable(b, extensions.New(extensions.Declaration{
 		ID:           "org.test.dependent.v1",
 		Dependencies: []extensions.Dependency{{Point: "missing.point", Optional: true}},
 		Init: func(context.Context, extensions.Config, extensions.Resolver) error {
@@ -304,7 +314,7 @@ func TestInitFailsForDependencyCycle(t *testing.T) {
 		{ID: "org.test.first.v1", Dependencies: []extensions.Dependency{{Extension: "org.test.second.v1"}}},
 		{ID: "org.test.second.v1", Dependencies: []extensions.Dependency{{Extension: "org.test.first.v1"}}},
 	} {
-		assert.NilError(t, b.Register(extensions.New(ext)))
+		assert.NilError(t, registerExecutable(b, extensions.New(ext)))
 	}
 
 	err := b.Init(context.Background(), nil)
@@ -314,7 +324,7 @@ func TestInitFailsForDependencyCycle(t *testing.T) {
 func TestInitWrapsExtensionError(t *testing.T) {
 	b := New()
 	initErr := errors.New("org.test.boom.v1")
-	err := b.Register(extensions.New(extensions.Declaration{
+	err := registerExecutable(b, extensions.New(extensions.Declaration{
 		ID: "org.test.broken.v1",
 		Init: func(context.Context, extensions.Config, extensions.Resolver) error {
 			return initErr
@@ -326,7 +336,7 @@ func TestInitWrapsExtensionError(t *testing.T) {
 	assert.ErrorIs(t, err, initErr)
 }
 
-func TestBuiltinEnumeration(t *testing.T) {
+func TestProviderIdentity(t *testing.T) {
 	const point = extensions.PointID("org.example.decider.v1")
 	stock := "stock"
 	custom := "custom"
@@ -339,35 +349,65 @@ func TestBuiltinEnumeration(t *testing.T) {
 		ID:        "org.example.custom.v1",
 		Providers: []extensions.Provider{{Point: point, Impl: custom}},
 	})
+	stockIdentity := extensions.ExtensionIdentity{ID: "org.mobyproject.stock.v1", Origin: extensions.ExtensionOriginBuiltin}
+	customIdentity := extensions.ExtensionIdentity{ID: "org.example.custom.v1", Origin: extensions.ExtensionOriginExecutable}
 
 	t.Run("origin is recorded at registration", func(t *testing.T) {
 		b := New()
-		assert.NilError(t, b.RegisterBuiltin(stockExt))
+		assert.NilError(t, b.Register(stockIdentity, stockExt))
 		providers := b.Providers(point)
 		assert.Equal(t, len(providers), 1)
 		assert.Equal(t, providers[0].Impl, stock)
-		assert.Check(t, providers[0].Builtin, "a RegisterBuiltin extension's providers must carry the origin")
+		assert.Equal(t, providers[0].Identity, stockIdentity)
 	})
 
-	t.Run("builtins are enumerated beside installed providers", func(t *testing.T) {
+	t.Run("builtins are enumerated beside executable providers", func(t *testing.T) {
 		b := New()
-		assert.NilError(t, b.RegisterBuiltin(stockExt))
-		assert.NilError(t, b.Register(customExt))
+		assert.NilError(t, b.Register(stockIdentity, stockExt))
+		assert.NilError(t, b.Register(customIdentity, customExt))
 		providers := b.Providers(point)
 		assert.Equal(t, len(providers), 2, "the registry enumerates; it does not mask")
 
 		effective := extensions.EffectiveProviders(providers)
 		assert.Equal(t, len(effective), 1, "origin precedence is selection, applied over the enumeration")
-		assert.Equal(t, effective[0].Extension, extensions.ExtensionID("org.example.custom.v1"))
-		assert.Check(t, !effective[0].Builtin)
+		assert.Equal(t, effective[0].Identity, customIdentity)
 	})
 
 	t.Run("a masked builtin stays reachable by id", func(t *testing.T) {
 		b := New()
-		assert.NilError(t, b.RegisterBuiltin(stockExt))
-		assert.NilError(t, b.Register(customExt))
+		assert.NilError(t, b.Register(stockIdentity, stockExt))
+		assert.NilError(t, b.Register(customIdentity, customExt))
 		impl, err := b.Provider(point, "org.mobyproject.stock.v1")
 		assert.NilError(t, err)
 		assert.Equal(t, impl, stock)
 	})
+}
+
+func TestRegisterRejectsInvalidIdentityWithoutMutation(t *testing.T) {
+	ext := extensions.New(extensions.Declaration{ID: "org.example.valid.v1"})
+	for _, tc := range []struct {
+		name     string
+		identity extensions.ExtensionIdentity
+		wantErr  string
+	}{
+		{name: "empty origin", identity: extensions.ExtensionIdentity{ID: "org.example.valid.v1"}, wantErr: "extension origin is required"},
+		{name: "unknown origin", identity: extensions.ExtensionIdentity{ID: "org.example.valid.v1", Origin: "remote"}, wantErr: `invalid extension origin "remote"`},
+		{name: "invalid id", identity: extensions.ExtensionIdentity{ID: "invalid", Origin: extensions.ExtensionOriginExecutable}, wantErr: `invalid extension id "invalid"`},
+		{name: "declaration mismatch", identity: extensions.ExtensionIdentity{ID: "org.example.other.v1", Origin: extensions.ExtensionOriginExecutable}, wantErr: `identity id "org.example.other.v1" does not match declared id "org.example.valid.v1"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := New()
+			err := b.Register(tc.identity, ext)
+			assert.ErrorContains(t, err, tc.wantErr)
+			assert.NilError(t, registerExecutable(b, ext), "rejected identity mutated broker state")
+		})
+	}
+}
+
+func TestRegisterRejectsDuplicateIdentity(t *testing.T) {
+	b := New()
+	ext := extensions.New(extensions.Declaration{ID: "org.example.duplicate.v1"})
+	assert.NilError(t, registerExecutable(b, ext))
+	err := registerExecutable(b, ext)
+	assert.ErrorContains(t, err, `extension "org.example.duplicate.v1" is already registered`)
 }

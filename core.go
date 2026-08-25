@@ -12,6 +12,41 @@ import (
 // ExtensionID identifies a deployable extension.
 type ExtensionID string
 
+// ExtensionOrigin identifies how the host obtained an extension.
+type ExtensionOrigin string
+
+const (
+	// ExtensionOriginBuiltin identifies an extension compiled into the host.
+	ExtensionOriginBuiltin ExtensionOrigin = "builtin"
+	// ExtensionOriginExecutable identifies an extension launched as an
+	// executable.
+	ExtensionOriginExecutable ExtensionOrigin = "executable"
+)
+
+// ExtensionIdentity is the host-attested identity of an extension.
+// The extension declares ID, but the host supplies and validates the complete
+// identity, including Origin.
+type ExtensionIdentity struct {
+	ID     ExtensionID
+	Origin ExtensionOrigin
+}
+
+// ValidateExtensionIdentity reports whether identity contains a valid extension
+// ID and a recognized host-attested origin.
+func ValidateExtensionIdentity(identity ExtensionIdentity) error {
+	if err := ValidateExtensionID(identity.ID); err != nil {
+		return err
+	}
+	switch identity.Origin {
+	case ExtensionOriginBuiltin, ExtensionOriginExecutable:
+		return nil
+	case "":
+		return errors.New("extension origin is required")
+	default:
+		return fmt.Errorf("invalid extension origin %q: want %q or %q", identity.Origin, ExtensionOriginBuiltin, ExtensionOriginExecutable)
+	}
+}
+
 // PointID identifies an extension point contract.
 type PointID string
 
@@ -80,36 +115,35 @@ type Provider struct {
 	Impl  any
 }
 
-// ResolvedProvider is a provider returned from a lookup, including its extension
-// id and whether it was registered by the host as a built-in.
+// ResolvedProvider is a provider returned from a lookup with its host-attested
+// extension identity.
 type ResolvedProvider struct {
-	Extension ExtensionID
-	Impl      any
-	Builtin   bool
+	Identity ExtensionIdentity
+	Impl     any
 }
 
-// EffectiveProviders applies built-in precedence for single-provider
-// resolution. Built-ins are used only when no installed provider exists.
+// EffectiveProviders applies origin precedence for single-provider resolution.
+// Built-ins are used only when no executable provider exists.
 // Fan-out and by-id lookups do not apply this precedence.
 func EffectiveProviders(providers []ResolvedProvider) []ResolvedProvider {
-	var installed, builtins []ResolvedProvider
+	var executables, builtins []ResolvedProvider
 	for _, p := range providers {
-		if p.Builtin {
+		if p.Identity.Origin == ExtensionOriginBuiltin {
 			builtins = append(builtins, p)
 		} else {
-			installed = append(installed, p)
+			executables = append(executables, p)
 		}
 	}
-	if len(installed) == 0 {
+	if len(executables) == 0 {
 		return builtins
 	}
-	return installed
+	return executables
 }
 
 // TypedProvider is a provider returned through a typed point handle.
 type TypedProvider[T any] struct {
-	Extension ExtensionID
-	Impl      T
+	Identity ExtensionIdentity
+	Impl     T
 }
 
 // Point binds a point ID to the Go interface implemented by its providers.
@@ -128,7 +162,7 @@ func DefinePoint[T any](id PointID) Point[T] {
 
 // DefineSinglePoint declares a point with one deciding provider instead of a
 // fan-out. The wire generator carries this cardinality into ClientPoint so the
-// host can reject multiple installed providers at startup.
+// host can reject multiple executable providers at startup.
 func DefineSinglePoint[T any](id PointID) Point[T] {
 	return DefinePoint[T](id)
 }
@@ -167,7 +201,7 @@ func (p Point[T]) ByExtension(r Resolver, extension ExtensionID) (T, error) {
 
 // Single returns the only point provider, after origin precedence
 // ([EffectiveProviders]): a built-in provider does not count against the
-// one-provider limit, it stands in when nothing is installed.
+// one-provider limit, it stands in when no executable provider exists.
 func (p Point[T]) Single(r Resolver) (T, error) {
 	providers := EffectiveProviders(r.Providers(p.id))
 	var zero T
@@ -175,7 +209,7 @@ func (p Point[T]) Single(r Resolver) (T, error) {
 	case 0:
 		return zero, fmt.Errorf("point %q has no providers", p.id)
 	case 1:
-		return typedProvider[T](p.id, providers[0].Extension, providers[0].Impl)
+		return typedProvider[T](p.id, providers[0].Identity.ID, providers[0].Impl)
 	default:
 		return zero, fmt.Errorf("point %q has multiple providers", p.id)
 	}
@@ -186,16 +220,16 @@ func (p Point[T]) Enabled(r Resolver) bool {
 	return len(r.Providers(p.id)) > 0
 }
 
-// All returns all point providers, including built-ins and installed providers.
+// All returns all point providers, including built-in and executable providers.
 func (p Point[T]) All(r Resolver) ([]TypedProvider[T], error) {
 	providers := r.Providers(p.id)
 	typed := make([]TypedProvider[T], 0, len(providers))
 	for _, provider := range providers {
-		impl, err := typedProvider[T](p.id, provider.Extension, provider.Impl)
+		impl, err := typedProvider[T](p.id, provider.Identity.ID, provider.Impl)
 		if err != nil {
 			return nil, err
 		}
-		typed = append(typed, TypedProvider[T]{Extension: provider.Extension, Impl: impl})
+		typed = append(typed, TypedProvider[T]{Identity: provider.Identity, Impl: impl})
 	}
 	return typed, nil
 }

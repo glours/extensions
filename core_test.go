@@ -115,30 +115,30 @@ func TestSingleSelection(t *testing.T) {
 
 	t.Run("builtin alone stands in", func(t *testing.T) {
 		got, err := testPoint.Single(resolverOf(
-			ResolvedProvider{Extension: "org.mobyproject.stock.v1", Impl: stock, Builtin: true},
+			resolvedProvider("org.mobyproject.stock.v1", ExtensionOriginBuiltin, stock),
 		))
 		assert.NilError(t, err)
 		assert.NilError(t, got.Call(context.Background()), "the default must stand in when nothing is installed")
 	})
 
-	t.Run("installed provider masks the builtin", func(t *testing.T) {
+	t.Run("executable provider masks the builtin", func(t *testing.T) {
 		called := ""
 		stockC := callerFunc(func(context.Context) error { called = "stock"; return nil })
 		customC := callerFunc(func(context.Context) error { called = "custom"; return nil })
 		got, err := testPoint.Single(resolverOf(
-			ResolvedProvider{Extension: "org.mobyproject.stock.v1", Impl: stockC, Builtin: true},
-			ResolvedProvider{Extension: "org.example.custom.v1", Impl: customC},
+			resolvedProvider("org.mobyproject.stock.v1", ExtensionOriginBuiltin, stockC),
+			resolvedProvider("org.example.custom.v1", ExtensionOriginExecutable, customC),
 		))
 		assert.NilError(t, err)
 		assert.NilError(t, got.Call(context.Background()))
-		assert.Equal(t, called, "custom", "the installed provider must replace the builtin, not conflict with it")
+		assert.Equal(t, called, "custom", "the executable provider must replace the builtin, not conflict with it")
 	})
 
-	t.Run("two installed providers are rejected", func(t *testing.T) {
+	t.Run("two executable providers are rejected", func(t *testing.T) {
 		_, err := testPoint.Single(resolverOf(
-			ResolvedProvider{Extension: "org.mobyproject.stock.v1", Impl: stock, Builtin: true},
-			ResolvedProvider{Extension: "org.example.one.v1", Impl: custom},
-			ResolvedProvider{Extension: "org.example.two.v1", Impl: custom},
+			resolvedProvider("org.mobyproject.stock.v1", ExtensionOriginBuiltin, stock),
+			resolvedProvider("org.example.one.v1", ExtensionOriginExecutable, custom),
+			resolvedProvider("org.example.two.v1", ExtensionOriginExecutable, custom),
 		))
 		assert.ErrorContains(t, err, "multiple providers")
 	})
@@ -150,7 +150,7 @@ func TestSingleSelection(t *testing.T) {
 
 	t.Run("wrong provider type names the extension", func(t *testing.T) {
 		_, err := testPoint.Single(resolverOf(
-			ResolvedProvider{Extension: "org.example.broken.v1", Impl: 42},
+			resolvedProvider("org.example.broken.v1", ExtensionOriginExecutable, 42),
 		))
 		assert.ErrorContains(t, err, `extension "org.example.broken.v1"`)
 	})
@@ -160,12 +160,13 @@ func TestEffectiveProviders(t *testing.T) {
 	ids := func(providers []ResolvedProvider) []ExtensionID {
 		out := make([]ExtensionID, 0, len(providers))
 		for _, p := range providers {
-			out = append(out, p.Extension)
+			out = append(out, p.Identity.ID)
 		}
 		return out
 	}
-	def := ResolvedProvider{Extension: "d", Builtin: true}
-	a, b := ResolvedProvider{Extension: "a"}, ResolvedProvider{Extension: "b"}
+	def := resolvedProvider("d", ExtensionOriginBuiltin, nil)
+	a := resolvedProvider("a", ExtensionOriginExecutable, nil)
+	b := resolvedProvider("b", ExtensionOriginExecutable, nil)
 
 	assert.Equal(t, len(EffectiveProviders(nil)), 0)
 	assert.DeepEqual(t, ids(EffectiveProviders([]ResolvedProvider{def})), []ExtensionID{"d"})
@@ -189,3 +190,7 @@ func (f callerFunc) Call(ctx context.Context) error { return f(ctx) }
 var testPoint = DefinePoint[caller]("org.example.fanout.test.v0")
 
 func resolverOf(providers ...ResolvedProvider) Resolver { return stubResolver{providers: providers} }
+
+func resolvedProvider(id ExtensionID, origin ExtensionOrigin, impl any) ResolvedProvider {
+	return ResolvedProvider{Identity: ExtensionIdentity{ID: id, Origin: origin}, Impl: impl}
+}

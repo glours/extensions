@@ -8,18 +8,26 @@ backward-compatibility promise.
 
 ## Contract and startup
 
-An extension declaration contains its id, points, dependencies, conflicts, and optional `Init` and `Shutdown` functions.
+An extension declaration contains its logical id, points, dependencies,
+conflicts, and optional `Init` and `Shutdown` functions.
 The host checks it before calling a provider or wiring an engine flow.
+The declared id is not the complete runtime identity: the host validates it
+against host authority and combines it with a host-attested origin.
 
 - An in-process declaration is a value read by the host.
 - For a separate binary, the daemon must launch the process before obtaining its declaration through the startup `Describe` handshake.
   A rejected declaration cannot provide a point or participate in an engine flow.
+- The host assigns origin `builtin` to configured in-process extensions and
+  `executable` to binaries it launches.
+  An external process cannot declare or otherwise supply its origin; origin is
+  absent from the process protocol.
 - Configuration is keyed by extension id.
   In-process extensions receive it during `Init`; separate binaries receive it in the startup handshake.
   The id is also the binary name, so the daemon can select configuration before launch.
 
 Registration is explicit: importing a package does nothing, and there is no package-level `func init()` registry.
-The host chooses the active set, which is fixed for the daemon lifetime.
+The host chooses the active set, which is fixed for that host and daemon
+lifetime.
 
 ## Identifiers
 
@@ -32,6 +40,11 @@ These names are distinct:
   Registration rejects invalid ids.
   Its version is a namespace element, not a semantic version, and is independent of point versions.
   Thus `com.foo.v1` and `com.foo.v2` are different extensions, binaries, and configurations that can coexist.
+- **Extension identity** is the logical extension id plus the host-attested
+  origin `builtin` or `executable`.
+  Registration rejects an empty or unknown origin, an invalid identity id, or
+  an identity id that differs from the declaration id.
+  Providers and Host policy receive this validated identity.
 - **Point id** identifies a versioned interface contract, for example `com.docker.compose.api.v1`.
   It is a lowercase, dot-separated, reverse-DNS-style name ending in `vN`; segments may contain digits, hyphens, and underscores.
   Providers implement points, and point dependencies name their ids.
@@ -59,10 +72,11 @@ Providers are selected when a point is used:
 - Blocking, fire-and-forget, and veto semantics belong to the point contract.
 
 `DefineSinglePoint` makes cardinality part of the point contract.
-Its generated `ClientPoint` carries that fact, so the host rejects two installed providers for the point at startup.
-For a single-provider point, a built-in is used only when no installed extension provides the point; an installed provider replaces it without a disable declaration.
+Its generated `ClientPoint` carries that fact, so the host rejects two executable providers for the point at startup.
+For a single-provider point, a built-in is used only when no executable extension provides the point; an executable provider replaces it without a disable declaration.
 Runtime fallback and failure behavior belongs to each point's call helper and contract.
-Fan-out accessors include built-ins and installed providers; by-id lookup always honors the named extension.
+Fan-out accessors include built-in and executable providers and expose each
+provider's identity; by-id lookup always honors the named extension id.
 
 Sole ownership is not a general provider setting.
 A fan-out point accepts any number of providers, and a consumer may request one at use time.
@@ -82,12 +96,28 @@ Missing required dependencies and cycles fail fast; optional dependencies may be
 An extension dependency adds naming and ordering, not another callable surface: all calls still use points.
 During in-process `Init`, the provider is called directly.
 During out-of-process `Init`, the extension calls a daemon callback channel that routes to the provider.
-The callback currently serves one provider per dependency point; cross-process `All` and by-id selection are deferred.
+The callback currently serves one effective provider per dependency point;
+cross-process `All` and by-id selection are deferred.
 
 The lifecycle is register, resolve, initialize, run, and shut down.
-Shutdown runs in reverse dependency order and tears down only initialized extensions.
-A launch or initialization failure unwinds started processes and initialized extensions; loading is all-or-nothing, not degraded.
+Normal shutdown runs semantic extension shutdown in reverse dependency order,
+then closes launched extension processes and callback resources.
+It tears down only initialized extensions semantically, while still releasing
+all acquired process resources.
+A launch, policy, registration, or initialization failure unwinds started
+processes and initialized extensions; loading is all-or-nothing, not degraded.
 Errors are attributed to the extension that produced them.
+
+There is no watchdog, process restart, reconnect, or adoption of extension
+processes from an earlier host.
+A daemon restart constructs a new Host and a new fixed extension set.
+Moby live restore does not retain extension processes, callback sockets, or
+in-memory extension state.
+Until a separate extension lifecycle exists, an extension must not own runtime
+state required by containers that are expected to survive their host daemon.
+The generic Host makes no universal guarantee that an abrupt host crash kills
+every child process; OS-specific parent-lifetime mechanisms may provide
+additional cleanup.
 
 ## Socket publication
 
@@ -120,8 +150,13 @@ Providers: []extensions.Provider{
 ```
 
 `servicev0.Offer` carries no transport registration and grants no publication
-authority. The Host applies `AllowPublication(extension, point)` and denies all
+authority. The Host applies `AllowPublication(identity, point)` and denies all
 offers when the policy is nil.
+Separately, `AllowProvider(identity, point)` admits providers wired for internal
+Host use; a nil provider policy preserves their registration.
+Provider denial fails loading and does not filter the declaration.
+An offered-only process Point without Host client wiring remains governed only
+by publication policy.
 
 An out-of-process extension passes every ordinary provider's generated
 `ServerPoint` to `sdk.Main` or `Server.Register`. The SDK records service names
@@ -179,7 +214,6 @@ Startup proceeds as follows:
 Point calls use generated gRPC server and client wiring.
 The generated client adapter presents the same Go interface to the host.
 A dead process produces gRPC errors until the daemon restarts.
-There is no watchdog, reconnect loop, or restart policy.
 
 ## Wire contract
 
@@ -205,7 +239,10 @@ permanent and breaking changes require a new `.vN`.
 ## Discovery security
 
 Discovery is a root-code-execution boundary.
-The daemon scans the extensions directory and launches every accepted executable, often as root; each binary is trusted daemon code.
+The daemon scans the extensions directory and launches every accepted
+executable, often as root; each accepted binary remains trusted host code.
+Its host-attested identity is attribution for lookup and policy, not a sandbox,
+permission, or security boundary.
 
 - `--extension-dir`, or the default `/usr/libexec/docker/moby-extensions`, is trusted.
   Treat it as a root-owned program directory: only package managers or operators should install files there, and unprivileged users must not be able to write to it.

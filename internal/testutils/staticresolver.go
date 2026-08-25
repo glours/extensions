@@ -12,10 +12,9 @@ type StaticResolver []StaticProvider
 
 // StaticProvider is one provider entry in a StaticResolver.
 type StaticProvider struct {
-	Point     extensions.PointID
-	Extension extensions.ExtensionID
-	Impl      any
-	Builtin   bool
+	Point    extensions.PointID
+	Identity extensions.ExtensionIdentity
+	Impl     any
 }
 
 // Provide returns a static provider entry for point.
@@ -26,7 +25,7 @@ func Provide[T any](point extensions.Point[T], impl any) StaticProvider {
 // Provider implements [extensions.Resolver].
 func (r StaticResolver) Provider(point extensions.PointID, id extensions.ExtensionID) (any, error) {
 	for _, p := range r.Providers(point) {
-		if p.Extension == id {
+		if p.Identity.ID == id {
 			return p.Impl, nil
 		}
 	}
@@ -40,14 +39,18 @@ func (r StaticResolver) Providers(point extensions.PointID) []extensions.Resolve
 		if provider.Point != point {
 			continue
 		}
-		id := provider.Extension
+		identity := provider.Identity
+		id := identity.ID
 		if id == "" {
 			id = extensions.ExtensionID(fmt.Sprintf("org.example.test%d.v1", len(providers)+1))
 		}
+		if identity.Origin == "" {
+			identity.Origin = extensions.ExtensionOriginExecutable
+		}
+		identity.ID = id
 		providers = append(providers, extensions.ResolvedProvider{
-			Extension: id,
-			Impl:      provider.Impl,
-			Builtin:   provider.Builtin,
+			Identity: identity,
+			Impl:     provider.Impl,
 		})
 	}
 	return providers

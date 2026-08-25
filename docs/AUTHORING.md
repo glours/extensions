@@ -92,8 +92,8 @@ The detailed rules are [DESIGN.md](./DESIGN.md#resolution-ordering-and-lifecycle
 
 - Use `org.mobyproject.extension.<area>.<name>.v0` for an engine point or a vendor reverse-DNS namespace, and a new `.vN` for a breaking change.
 - Call `Point.Single`, `Point.All`, or `Point.ByExtension` from a helper rather than from engine code.
-  Use `DefineSinglePoint` for a deciding point; the generated `ClientPoint` makes the host reject two installed providers.
-  Built-ins yield to installed providers.
+  Use `DefineSinglePoint` for a deciding point; the generated `ClientPoint` makes the host reject two executable providers.
+  Built-ins yield to executable providers.
   Runtime fallback and failure behavior belongs to the point's call helper and must be stated in its contract.
   Omit a built-in point's `ClientPoint` from `clientProviders()` to close it to replacement; a launched declaration is then rejected at client wiring.
 - Prefer unary `M(ctx, *Req) (*Resp, error)` methods and explicit phases such as `Update` followed by `Validate`; keep dependencies acyclic and optional when absence is valid.
@@ -201,7 +201,7 @@ func clientProviders() []clientpoint.Registration {
 ```
 
 `ClientPoint` builds an in-process caller from the gRPC connection.
-This list is the boundary for launched providers: an unlisted declared point is rejected, while any installed extension may provide a listed point.
+This list is the boundary for launched providers: an unlisted declared point is rejected, while any executable extension may provide a listed point.
 See [DESIGN.md#discovery-security](./DESIGN.md#discovery-security).
 
 An offered-only process Point does not need `ClientPoint` wiring because the Host
@@ -235,10 +235,17 @@ Providers: []extensions.Provider{
 The Host defaults to deny. Allow an offer only through explicit policy:
 
 ```go
-AllowPublication: host.PublicationPolicyFunc(func(extension extensions.ExtensionID, point extensions.PointID) bool {
-	return extension == "org.example.greeter.v1" && point == greeterv0.Point.ID()
+AllowPublication: host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+	return identity.ID == "org.example.greeter.v1" && point == greeterv0.Point.ID()
 }),
 ```
+
+Publication policy receives the host-attested identity. Internal provider
+admission is a separate option with different nil behavior: a nil
+`AllowProvider` preserves all internally wired providers, while a non-nil
+policy can reject loading by identity and Point. Offered-only process Points
+without `ClientPoint` wiring are publication-only and do not invoke provider
+policy.
 
 For an in-process extension, supply generated adapters at Host composition:
 
@@ -453,6 +460,7 @@ Health checks, reconnect, and restart are future work in [ROADMAP.md](./ROADMAP.
 - [ ] Generate and commit `.proto` and `protogen/` output.
 - [ ] Call a helper from the engine flow, passing the host resolver.
 - [ ] Add generated `ClientPoint` wiring when the daemon calls a separate-binary provider internally.
+- [ ] Add Host provider-admission policy when internal providers need an allowlist.
 - [ ] Add dependency `ServerPoint` wiring when separate binaries call engine points.
 - [ ] Register every ordinary provider's `ServerPoint` in a separate binary.
 - [ ] Implement every published API as an ordinary `Point.Provide(impl)` provider.
@@ -468,6 +476,7 @@ Health checks, reconnect, and restart are future work in [ROADMAP.md](./ROADMAP.
 | Define a point | `extpoints/<area>/<name>/v0/<name>.go` | Go interface, `pb` messages, `DefinePoint`, helpers |
 | Name its wire service | same contract file | inferred `<PointID>.<InterfaceName>` |
 | Offer an ordinary point | extension declaration | implement it with `Point.Provide` and name it in `servicev0.Offer` |
+| Authorize an internal provider | host options | set identity-aware `AllowProvider`; nil preserves registration |
 | Authorize publication | host options | set default-deny `AllowPublication`; supply `PointServers` for in-process offers |
 | Invoke a published point | external caller | use generated `NewClient(hostConn)` |
 | Serve an ordinary point | SDK or dependency wiring | pass its generated `ServerPoint` |

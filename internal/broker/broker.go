@@ -23,10 +23,8 @@ type Broker struct {
 
 type extensionState struct {
 	extension   extensions.Declaration
+	identity    extensions.ExtensionIdentity
 	initialized bool
-	// builtin records the registration origin: true for an extension the host's
-	// own program ships, false for one installed from outside.
-	builtin bool
 }
 
 // New creates an empty Broker.
@@ -34,21 +32,14 @@ func New() *Broker {
 	return &Broker{extensions: make(map[extensions.ExtensionID]*extensionState)}
 }
 
-// Register adds an installed extension to the broker.
-func (b *Broker) Register(ext extensions.Extension) error {
-	return b.register(ext, false)
-}
-
-// RegisterBuiltin adds an extension shipped by the host. Built-in providers
-// yield to installed providers during single-provider resolution.
-func (b *Broker) RegisterBuiltin(ext extensions.Extension) error {
-	return b.register(ext, true)
-}
-
-func (b *Broker) register(ext extensions.Extension, builtin bool) error {
-	decl := ext.Declaration()
-	if err := extensions.ValidateExtensionID(decl.ID); err != nil {
+// Register adds an extension under the identity attested by its host.
+func (b *Broker) Register(identity extensions.ExtensionIdentity, ext extensions.Extension) error {
+	if err := extensions.ValidateExtensionIdentity(identity); err != nil {
 		return err
+	}
+	decl := ext.Declaration()
+	if identity.ID != decl.ID {
+		return fmt.Errorf("extension identity id %q does not match declared id %q", identity.ID, decl.ID)
 	}
 	seenPoints := make(map[extensions.PointID]struct{})
 	for _, provider := range decl.Providers {
@@ -88,7 +79,7 @@ func (b *Broker) register(ext extensions.Extension, builtin bool) error {
 		return err
 	}
 
-	b.extensions[decl.ID] = &extensionState{extension: decl, builtin: builtin}
+	b.extensions[decl.ID] = &extensionState{extension: decl, identity: identity}
 	b.order = append(b.order, decl.ID)
 	return nil
 }
@@ -171,9 +162,8 @@ func (b *Broker) providersLocked(point extensions.PointID) []extensions.Resolved
 		for _, provider := range state.extension.Providers {
 			if provider.Point == point {
 				providers = append(providers, extensions.ResolvedProvider{
-					Extension: id,
-					Impl:      provider.Impl,
-					Builtin:   state.builtin,
+					Identity: state.identity,
+					Impl:     provider.Impl,
 				})
 			}
 		}
@@ -206,7 +196,7 @@ func (b *Broker) resolveOrder() ([]extensions.ExtensionID, error) {
 				return nil, fmt.Errorf("extension %q requires missing point %q", id, dep.Point)
 			}
 			for _, provider := range providers {
-				dependencies[id] = append(dependencies[id], provider.Extension)
+				dependencies[id] = append(dependencies[id], provider.Identity.ID)
 			}
 		}
 	}

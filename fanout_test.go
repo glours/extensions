@@ -30,8 +30,8 @@ func TestEachBoundsEveryProviderIndependently(t *testing.T) {
 	})
 
 	err := Each(context.Background(), testPoint, resolverOf(
-		ResolvedProvider{Extension: "slow", Impl: slow},
-		ResolvedProvider{Extension: "second", Impl: record},
+		resolvedProvider("slow", ExtensionOriginExecutable, slow),
+		resolvedProvider("second", ExtensionOriginExecutable, record),
 	), Policy{Timeout: timeout}, func(ctx context.Context, c caller) error {
 		return c.Call(ctx)
 	})
@@ -48,8 +48,8 @@ func TestEachAbortsOnErrorAndAttributes(t *testing.T) {
 	veto := callerFunc(func(context.Context) error { called++; return errors.New("not allowed") })
 
 	err := Each(context.Background(), testPoint, resolverOf(
-		ResolvedProvider{Extension: "org.example.veto.v1", Impl: veto},
-		ResolvedProvider{Extension: "org.example.after.v1", Impl: count},
+		resolvedProvider("org.example.veto.v1", ExtensionOriginExecutable, veto),
+		resolvedProvider("org.example.after.v1", ExtensionOriginExecutable, count),
 	), Policy{Action: "vetoed the start"}, func(ctx context.Context, c caller) error {
 		return c.Call(ctx)
 	})
@@ -64,8 +64,8 @@ func TestEachFailOpenSkipsAndContinues(t *testing.T) {
 	boom := callerFunc(func(context.Context) error { called++; return errors.New("boom") })
 
 	err := Each(context.Background(), testPoint, resolverOf(
-		ResolvedProvider{Extension: "org.example.broken.v1", Impl: boom},
-		ResolvedProvider{Extension: "org.example.ok.v1", Impl: count},
+		resolvedProvider("org.example.broken.v1", ExtensionOriginExecutable, boom),
+		resolvedProvider("org.example.ok.v1", ExtensionOriginExecutable, count),
 	), Policy{FailOpen: true}, func(ctx context.Context, c caller) error {
 		return c.Call(ctx)
 	})
@@ -77,8 +77,8 @@ func TestEachFailOpenSkipsAndContinues(t *testing.T) {
 func TestFoldThreadsValueInOrder(t *testing.T) {
 	noop := callerFunc(func(context.Context) error { return nil })
 	out, err := Fold(context.Background(), testPoint, resolverOf(
-		ResolvedProvider{Extension: "a", Impl: noop},
-		ResolvedProvider{Extension: "b", Impl: noop},
+		resolvedProvider("a", ExtensionOriginExecutable, noop),
+		resolvedProvider("b", ExtensionOriginExecutable, noop),
 	), Policy{}, "seed", func(_ context.Context, _ caller, acc string) (string, error) {
 		return acc + "+", nil
 	})
@@ -88,8 +88,8 @@ func TestFoldThreadsValueInOrder(t *testing.T) {
 
 func TestFoldDiscardsPartialValueOnError(t *testing.T) {
 	out, err := Fold(context.Background(), testPoint, resolverOf(
-		ResolvedProvider{Extension: "a", Impl: callerFunc(func(context.Context) error { return nil })},
-		ResolvedProvider{Extension: "b", Impl: callerFunc(func(context.Context) error { return errors.New("no") })},
+		resolvedProvider("a", ExtensionOriginExecutable, callerFunc(func(context.Context) error { return nil })),
+		resolvedProvider("b", ExtensionOriginExecutable, callerFunc(func(context.Context) error { return errors.New("no") })),
 	), Policy{}, "seed", func(_ context.Context, c caller, acc string) (string, error) {
 		if err := c.Call(context.Background()); err != nil {
 			return acc, err
@@ -117,5 +117,5 @@ func TestPointIDName(t *testing.T) {
 
 func TestEnabled(t *testing.T) {
 	assert.Assert(t, !testPoint.Enabled(resolverOf()))
-	assert.Assert(t, testPoint.Enabled(resolverOf(ResolvedProvider{Extension: "a", Impl: callerFunc(nil)})))
+	assert.Assert(t, testPoint.Enabled(resolverOf(resolvedProvider("a", ExtensionOriginExecutable, callerFunc(nil)))))
 }

@@ -24,7 +24,10 @@ import (
 
 const lifecycleExtensionID = extensions.ExtensionID("org.example.lifecycle.v1")
 
-var _ PublicationPolicy = PublicationPolicyFunc(nil)
+var (
+	_ PointPolicy       = PointPolicyFunc(nil)
+	_ PublicationPolicy = PublicationPolicyFunc(nil)
+)
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
@@ -58,6 +61,10 @@ func processProbeConfig(probeFile string, failInit bool) map[extensions.Extensio
 			"failInit":  failInit,
 		},
 	}
+}
+
+func executableIdentity(id extensions.ExtensionID) extensions.ExtensionIdentity {
+	return extensions.ExtensionIdentity{ID: id, Origin: extensions.ExtensionOriginExecutable}
 }
 
 func processProbeAddress(t *testing.T, probeFile string) string {
@@ -95,23 +102,23 @@ func TestExtensionFromHostedRejectsUnsupportedPoints(t *testing.T) {
 	}
 
 	ext, err := extensionFromHosted(hostedExtension{
-		id:     "org.example.ext.v1",
-		points: []extensions.PointID{supported},
+		identity: executableIdentity("org.example.ext.v1"),
+		points:   []extensions.PointID{supported},
 	}, providers)
 	assert.NilError(t, err)
 	assert.Equal(t, len(ext.Declaration().Providers), 1)
 
 	_, err = extensionFromHosted(hostedExtension{
-		id:     "org.example.ext.v1",
-		points: []extensions.PointID{supported, unsupported},
+		identity: executableIdentity("org.example.ext.v1"),
+		points:   []extensions.PointID{supported, unsupported},
 	}, providers)
 	assert.ErrorContains(t, err, "unsupported point")
 	assert.ErrorContains(t, err, string(unsupported))
 
 	ext, err = extensionFromHosted(hostedExtension{
-		id:      "org.example.ext.v1",
-		points:  []extensions.PointID{supported, offered, servicev0.Point.ID()},
-		offered: []extensions.PointID{offered},
+		identity: executableIdentity("org.example.ext.v1"),
+		points:   []extensions.PointID{supported, offered, servicev0.Point.ID()},
+		offered:  []extensions.PointID{offered},
 	}, providers)
 	assert.NilError(t, err)
 	assert.Equal(t, len(ext.Declaration().Providers), 1)
@@ -122,7 +129,7 @@ func TestExtensionFromHostedForwardsBrokerConfig(t *testing.T) {
 	want := extensions.Config{"message": "configured"}
 	var got extensions.Config
 	ext, err := extensionFromHosted(hostedExtension{
-		id: id,
+		identity: executableIdentity(id),
 		initialize: func(_ context.Context, config extensions.Config) error {
 			got = config
 			return nil
@@ -131,7 +138,7 @@ func TestExtensionFromHostedForwardsBrokerConfig(t *testing.T) {
 	assert.NilError(t, err)
 
 	b := broker.New()
-	assert.NilError(t, b.Register(ext))
+	assert.NilError(t, registerExecutableForTest(b, ext))
 	assert.NilError(t, b.Init(context.Background(), map[extensions.ExtensionID]extensions.Config{id: want}))
 	assert.DeepEqual(t, got, want)
 }
@@ -139,7 +146,7 @@ func TestExtensionFromHostedForwardsBrokerConfig(t *testing.T) {
 func TestExtensionFromHostedRunsSemanticShutdown(t *testing.T) {
 	shutdown := false
 	ext, err := extensionFromHosted(hostedExtension{
-		id:         "org.example.hosted.v1",
+		identity:   executableIdentity("org.example.hosted.v1"),
 		initialize: func(context.Context, extensions.Config) error { return nil },
 		shutdown: func(context.Context) error {
 			shutdown = true
@@ -149,7 +156,7 @@ func TestExtensionFromHostedRunsSemanticShutdown(t *testing.T) {
 	assert.NilError(t, err)
 
 	b := broker.New()
-	assert.NilError(t, b.Register(ext))
+	assert.NilError(t, registerExecutableForTest(b, ext))
 	assert.NilError(t, b.Init(context.Background(), nil))
 	assert.NilError(t, b.Shutdown(context.Background()))
 	assert.Assert(t, shutdown, "the broker did not run hosted semantic shutdown")
@@ -188,6 +195,13 @@ func newProviderExtension(id extensions.ExtensionID, point extensions.PointID) e
 	})
 }
 
+func registerExecutableForTest(b *broker.Broker, ext extensions.Extension) error {
+	return b.Register(extensions.ExtensionIdentity{
+		ID:     ext.Declaration().ID,
+		Origin: extensions.ExtensionOriginExecutable,
+	}, ext)
+}
+
 func TestServeCallback(t *testing.T) {
 	const dep = extensions.PointID("org.mobyproject.extension.dep.v1")
 
@@ -214,7 +228,7 @@ func TestServeCallback(t *testing.T) {
 
 	t.Run("one provider is registered", func(t *testing.T) {
 		b := broker.New()
-		assert.NilError(t, b.Register(newProviderExtension("org.example.a.v1", dep)))
+		assert.NilError(t, registerExecutableForTest(b, newProviderExtension("org.example.a.v1", dep)))
 		var served []any
 		endpoint := filepath.Join(shortTempDir(t), "callback.sock")
 		srv, err := serveCallback(endpoint, []serverpoint.Registration{newDep(&served)}, b)
@@ -224,10 +238,31 @@ func TestServeCallback(t *testing.T) {
 		assert.Equal(t, len(served), 1)
 	})
 
+	t.Run("executable provider replaces builtin", func(t *testing.T) {
+		b := broker.New()
+		builtin := newProviderExtension("org.example.builtin.v1", dep)
+		assert.NilError(t, b.Register(extensions.ExtensionIdentity{
+			ID:     builtin.Declaration().ID,
+			Origin: extensions.ExtensionOriginBuiltin,
+		}, builtin))
+		executable := extensions.New(extensions.Declaration{
+			ID:        "org.example.executable.v1",
+			Providers: []extensions.Provider{{Point: dep, Impl: "executable"}},
+		})
+		assert.NilError(t, registerExecutableForTest(b, executable))
+		var served []any
+		endpoint := filepath.Join(shortTempDir(t), "callback.sock")
+		srv, err := serveCallback(endpoint, []serverpoint.Registration{newDep(&served)}, b)
+		assert.NilError(t, err)
+		assert.Assert(t, srv != nil)
+		defer srv.Stop()
+		assert.DeepEqual(t, served, []any{"executable"})
+	})
+
 	t.Run("multiple providers is an error", func(t *testing.T) {
 		b := broker.New()
-		assert.NilError(t, b.Register(newProviderExtension("org.example.a.v1", dep)))
-		assert.NilError(t, b.Register(newProviderExtension("org.example.b.v1", dep)))
+		assert.NilError(t, registerExecutableForTest(b, newProviderExtension("org.example.a.v1", dep)))
+		assert.NilError(t, registerExecutableForTest(b, newProviderExtension("org.example.b.v1", dep)))
 		var served []any
 		endpoint := filepath.Join(shortTempDir(t), "callback.sock")
 		srv, err := serveCallback(endpoint, []serverpoint.Registration{newDep(&served)}, b)
@@ -271,6 +306,40 @@ func TestSinglePointRejectsTwoProviders(t *testing.T) {
 	assert.NilError(t, h.Shutdown(context.Background()))
 }
 
+func TestProviderAdmissionPolicy(t *testing.T) {
+	const point = extensions.PointID("org.example.internal.v1")
+	const id = extensions.ExtensionID("org.example.provider.v1")
+	ext := newProviderExtension(id, point)
+	wantIdentity := extensions.ExtensionIdentity{ID: id, Origin: extensions.ExtensionOriginBuiltin}
+	var gotIdentity extensions.ExtensionIdentity
+	var gotPoint extensions.PointID
+
+	_, err := New(context.Background(), Options{
+		RuntimeDir: t.TempDir(),
+		Extensions: []extensions.Extension{ext},
+		AllowProvider: PointPolicyFunc(func(identity extensions.ExtensionIdentity, policyPoint extensions.PointID) bool {
+			gotIdentity = identity
+			gotPoint = policyPoint
+			return false
+		}),
+	})
+	assert.ErrorContains(t, err, `extension "org.example.provider.v1"`)
+	assert.ErrorContains(t, err, `origin "builtin"`)
+	assert.ErrorContains(t, err, `point "org.example.internal.v1"`)
+	assert.Equal(t, gotIdentity, wantIdentity)
+	assert.Equal(t, gotPoint, point)
+
+	h, err := New(context.Background(), Options{
+		RuntimeDir: t.TempDir(),
+		Extensions: []extensions.Extension{ext},
+	})
+	assert.NilError(t, err)
+	t.Cleanup(func() { assert.NilError(t, h.Shutdown(context.Background())) })
+	providers := h.Providers(point)
+	assert.Equal(t, len(providers), 1)
+	assert.Equal(t, providers[0].Identity, wantIdentity)
+}
+
 // TestLaunchedExtensionCarriesShutdown verifies launched extensions participate
 // in broker shutdown ordering.
 func TestLaunchedExtensionCarriesShutdown(t *testing.T) {
@@ -298,6 +367,26 @@ func TestProcessResourceCleanup(t *testing.T) {
 	dir, bin := buildLifecycleExtension(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	t.Run("provider policy denial", func(t *testing.T) {
+		probeFile := filepath.Join(t.TempDir(), "probe")
+		var gotIdentity extensions.ExtensionIdentity
+		_, err := New(ctx, Options{
+			RuntimeDir:      shortTempDir(t),
+			Dirs:            []string{dir},
+			ClientProviders: []clientpoint.Registration{echopb.ClientPoint},
+			ExtensionConfig: processProbeConfig(probeFile, false),
+			AllowProvider: PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+				gotIdentity = identity
+				return false
+			}),
+		})
+		assert.ErrorContains(t, err, `extension "org.example.lifecycle.v1"`)
+		assert.ErrorContains(t, err, `origin "executable"`)
+		assert.ErrorContains(t, err, `point "moby.extensions.internal.launcher.echo.v1"`)
+		assert.Equal(t, gotIdentity, executableIdentity(lifecycleExtensionID))
+		assertProcessReleased(t, probeFile)
+	})
 
 	t.Run("adaptation error", func(t *testing.T) {
 		probeFile := filepath.Join(t.TempDir(), "probe")
@@ -441,7 +530,7 @@ func TestHostShutdownJoinsSemanticAndResourceErrors(t *testing.T) {
 	resourceErr := errors.New("resource close")
 	var order []string
 	b := broker.New()
-	assert.NilError(t, b.Register(extensions.New(extensions.Declaration{
+	assert.NilError(t, registerExecutableForTest(b, extensions.New(extensions.Declaration{
 		ID: "org.example.shutdown.v1",
 		Shutdown: func(context.Context) error {
 			order = append(order, "semantic")
@@ -472,30 +561,31 @@ func TestApproveProcessPublications(t *testing.T) {
 			point: {"example.API"},
 		},
 	}
-	allow := PublicationPolicyFunc(func(extensions.ExtensionID, extensions.PointID) bool { return true })
-	deny := PublicationPolicyFunc(func(extensions.ExtensionID, extensions.PointID) bool { return false })
+	identity := executableIdentity(launched.ID)
+	allow := PublicationPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return true })
+	deny := PublicationPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return false })
 
 	t.Run("nil policy denies", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
-		assert.NilError(t, approveProcessPublications(launched, nil, published, map[string]extensions.ExtensionID{}, nil))
+		assert.NilError(t, approveProcessPublications(identity, launched, nil, published, map[string]extensions.ExtensionID{}, nil))
 		assert.Equal(t, len(published), 0)
 	})
 
 	t.Run("nil function policy denies", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
-		assert.NilError(t, approveProcessPublications(launched, PublicationPolicyFunc(nil), published, map[string]extensions.ExtensionID{}, nil))
+		assert.NilError(t, approveProcessPublications(identity, launched, PublicationPolicyFunc(nil), published, map[string]extensions.ExtensionID{}, nil))
 		assert.Equal(t, len(published), 0)
 	})
 
 	t.Run("denied offer is omitted", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
-		assert.NilError(t, approveProcessPublications(launched, deny, published, map[string]extensions.ExtensionID{}, nil))
+		assert.NilError(t, approveProcessPublications(identity, launched, deny, published, map[string]extensions.ExtensionID{}, nil))
 		assert.Equal(t, len(published), 0)
 	})
 
 	t.Run("allowed offer is copied", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
-		assert.NilError(t, approveProcessPublications(launched, allow, published, map[string]extensions.ExtensionID{}, nil))
+		assert.NilError(t, approveProcessPublications(identity, launched, allow, published, map[string]extensions.ExtensionID{}, nil))
 		assert.DeepEqual(t, published[launched.ID][point], []string{"example.API"})
 		launched.ProviderServices[point][0] = "changed"
 		assert.DeepEqual(t, published[launched.ID][point], []string{"example.API"})
@@ -504,17 +594,17 @@ func TestApproveProcessPublications(t *testing.T) {
 
 	t.Run("missing service is rejected", func(t *testing.T) {
 		missing := &launcher.Launched{ID: launched.ID, OfferedPoints: []extensions.PointID{point}}
-		err := approveProcessPublications(missing, allow, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
+		err := approveProcessPublications(identity, missing, allow, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
 		assert.ErrorContains(t, err, "without a gRPC service")
 	})
 
 	t.Run("reserved service is rejected", func(t *testing.T) {
-		err := approveProcessPublications(launched, allow, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, map[string]bool{"example.API": true})
+		err := approveProcessPublications(identity, launched, allow, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, map[string]bool{"example.API": true})
 		assert.ErrorContains(t, err, `cannot publish reserved gRPC service "example.API"`)
 	})
 
 	t.Run("service collision is rejected", func(t *testing.T) {
-		err := approveProcessPublications(launched, allow, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{"example.API": "org.example.other.v1"}, nil)
+		err := approveProcessPublications(identity, launched, allow, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{"example.API": "org.example.other.v1"}, nil)
 		assert.ErrorContains(t, err, `extensions "org.example.other.v1" and "org.example.first.v1" both publish gRPC service "example.API"`)
 	})
 }
@@ -529,17 +619,18 @@ func TestInProcessPublicationValidation(t *testing.T) {
 			servicev0.Offer(pointDefinition),
 		},
 	})
-	allow := PublicationPolicyFunc(func(extensions.ExtensionID, extensions.PointID) bool { return true })
-	deny := PublicationPolicyFunc(func(extensions.ExtensionID, extensions.PointID) bool { return false })
+	identity := extensions.ExtensionIdentity{ID: ext.Declaration().ID, Origin: extensions.ExtensionOriginBuiltin}
+	allow := PublicationPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return true })
+	deny := PublicationPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return false })
 
 	t.Run("denied offer needs no adapter", func(t *testing.T) {
-		services, err := collectInProcessPublications(ext, deny, nil, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
+		services, err := collectInProcessPublications(identity, ext, deny, nil, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
 		assert.NilError(t, err)
 		assert.Equal(t, len(services), 0)
 	})
 
 	t.Run("allowed offer needs adapter", func(t *testing.T) {
-		_, err := collectInProcessPublications(ext, allow, nil, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
+		_, err := collectInProcessPublications(identity, ext, allow, nil, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
 		assert.ErrorContains(t, err, "has no server registration")
 	})
 
@@ -552,19 +643,19 @@ func TestInProcessPublicationValidation(t *testing.T) {
 	servers := map[extensions.PointID]serverpoint.Registration{point: registration}
 
 	t.Run("reserved service is rejected", func(t *testing.T) {
-		_, err := collectInProcessPublications(ext, allow, servers, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, map[string]bool{"example.API": true})
+		_, err := collectInProcessPublications(identity, ext, allow, servers, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, map[string]bool{"example.API": true})
 		assert.ErrorContains(t, err, `cannot publish reserved gRPC service "example.API"`)
 	})
 
 	t.Run("process service collision is rejected", func(t *testing.T) {
-		_, err := collectInProcessPublications(ext, allow, servers, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{"example.API": "org.example.process.v1"}, nil)
+		_, err := collectInProcessPublications(identity, ext, allow, servers, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{"example.API": "org.example.process.v1"}, nil)
 		assert.ErrorContains(t, err, `extensions "org.example.process.v1" and "org.example.extension.v1" both publish gRPC service "example.API"`)
 	})
 
 	t.Run("in-process service collision is rejected", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
 		owners := make(map[string]extensions.ExtensionID)
-		_, err := collectInProcessPublications(ext, allow, servers, published, owners, nil)
+		_, err := collectInProcessPublications(identity, ext, allow, servers, published, owners, nil)
 		assert.NilError(t, err)
 		other := extensions.New(extensions.Declaration{
 			ID: "org.example.other.v1",
@@ -573,7 +664,8 @@ func TestInProcessPublicationValidation(t *testing.T) {
 				servicev0.Offer(pointDefinition),
 			},
 		})
-		_, err = collectInProcessPublications(other, allow, servers, published, owners, nil)
+		otherIdentity := extensions.ExtensionIdentity{ID: other.Declaration().ID, Origin: extensions.ExtensionOriginBuiltin}
+		_, err = collectInProcessPublications(otherIdentity, other, allow, servers, published, owners, nil)
 		assert.ErrorContains(t, err, `extensions "org.example.extension.v1" and "org.example.other.v1" both publish gRPC service "example.API"`)
 	})
 }
