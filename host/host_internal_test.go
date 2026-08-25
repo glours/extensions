@@ -340,6 +340,35 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 	assert.Equal(t, providers[0].Identity, wantIdentity)
 }
 
+// TestProviderAdmissionSkipsServiceV0Offer verifies that the servicev0 offer
+// marker in a declaration is transparent to provider admission policy.
+// Publication is governed solely by AllowPublication; the marker must never
+// reach AllowProvider.
+func TestProviderAdmissionSkipsServiceV0Offer(t *testing.T) {
+	const id = extensions.ExtensionID("org.example.offered.v1")
+	const realPoint = extensions.PointID("org.example.internal.v1")
+	pointDef := extensions.DefinePoint[any](realPoint)
+	ext := extensions.New(extensions.Declaration{
+		ID: id,
+		Providers: []extensions.Provider{
+			pointDef.Provide(struct{}{}),
+			servicev0.Offer(pointDef),
+		},
+	})
+	var policyPoints []extensions.PointID
+	h, err := New(context.Background(), Options{
+		RuntimeDir: t.TempDir(),
+		Extensions: []extensions.Extension{ext},
+		AllowProvider: PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) bool {
+			policyPoints = append(policyPoints, point)
+			return point == realPoint
+		}),
+	})
+	assert.NilError(t, err)
+	t.Cleanup(func() { assert.NilError(t, h.Shutdown(context.Background())) })
+	assert.DeepEqual(t, policyPoints, []extensions.PointID{realPoint})
+}
+
 // TestLaunchedExtensionCarriesShutdown verifies launched extensions participate
 // in broker shutdown ordering.
 func TestLaunchedExtensionCarriesShutdown(t *testing.T) {

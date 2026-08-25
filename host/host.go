@@ -274,6 +274,9 @@ func admitProviders(identity extensions.ExtensionIdentity, providers []extension
 		return nil
 	}
 	for _, provider := range providers {
+		if extensions.IsMetadataPoint(provider.Point) {
+			continue
+		}
 		if !policy.Allow(identity, provider.Point) {
 			return fmt.Errorf("extension %q with origin %q is not allowed to provide point %q", identity.ID, identity.Origin, provider.Point)
 		}

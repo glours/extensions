@@ -16,6 +16,8 @@ func TestOfferCopiesAndReportsPoints(t *testing.T) {
 	points[0] = extensions.DefinePoint[any]("org.example.changed.v1")
 
 	assert.Equal(t, offer.Point, Point.ID())
+	assert.Assert(t, extensions.IsMetadataPoint(Point.ID()),
+		"the offer marker point must be classified as framework metadata")
 	provider := offer.Impl.(Provider)
 	got := provider.OfferedPoints()
 	assert.DeepEqual(t, got, []extensions.PointID{foo.ID(), bar.ID()})

@@ -31,8 +31,8 @@ type ExtensionIdentity struct {
 	Origin ExtensionOrigin
 }
 
-// ValidateExtensionIdentity reports whether identity contains a valid extension
-// ID and a recognized host-attested origin.
+// ValidateExtensionIdentity returns an error unless identity contains a valid
+// extension ID and a recognized host-attested origin.
 func ValidateExtensionIdentity(identity ExtensionIdentity) error {
 	if err := ValidateExtensionID(identity.ID); err != nil {
 		return err
@@ -49,6 +49,16 @@ func ValidateExtensionIdentity(identity ExtensionIdentity) error {
 
 // PointID identifies an extension point contract.
 type PointID string
+
+// IsMetadataPoint reports whether point carries framework metadata rather than
+// a callable capability.
+// Host provider admission never consults policy for metadata points; only
+// publication policy governs them.
+// Currently the servicev0 offer marker is the only metadata point; its package
+// tests keep this ID in sync with the point definition.
+func IsMetadataPoint(point PointID) bool {
+	return point == "org.mobyproject.extension.service.v0"
+}
 
 // Name returns the point's short name, the segment before its version.
 func (id PointID) Name() string {

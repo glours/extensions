@@ -157,6 +157,8 @@ Host use; a nil provider policy preserves their registration.
 Provider denial fails loading and does not filter the declaration.
 An offered-only process Point without Host client wiring remains governed only
 by publication policy.
+The `servicev0` offer marker in a declaration is exempt from provider admission
+and is governed only by publication policy.
 
 An out-of-process extension passes every ordinary provider's generated
 `ServerPoint` to `sdk.Main` or `Server.Register`. The SDK records service names

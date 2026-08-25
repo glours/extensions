@@ -246,6 +246,8 @@ admission is a separate option with different nil behavior: a nil
 policy can reject loading by identity and Point. Offered-only process Points
 without `ClientPoint` wiring are publication-only and do not invoke provider
 policy.
+The `servicev0` offer marker itself is also exempt from provider admission;
+it is governed solely by publication policy.
 
 For an in-process extension, supply generated adapters at Host composition:
 
