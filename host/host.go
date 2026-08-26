@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -43,35 +44,121 @@ type PublicationPolicy = PointPolicy
 // PublicationPolicyFunc adapts a function to [PublicationPolicy].
 type PublicationPolicyFunc = PointPolicyFunc
 
-// Options configures a [Host].
-type Options struct {
-	// RuntimeDir is where extension sockets are created.
-	RuntimeDir string
-	// Extensions are in-process extensions to register.
-	Extensions []extensions.Extension
-	// Dirs are scanned for out-of-process extension binaries.
-	Dirs []string
-	// ClientProviders lists supported out-of-process points and their client
-	// wiring. Unlisted points are rejected unless the extension offered them only
-	// for external publication.
-	ClientProviders []clientpoint.Registration
-	// AllowProvider decides which internally registered providers are admitted.
-	// A nil policy preserves registration of all declared internal providers.
-	AllowProvider PointPolicy
-	// AllowPublication decides which offered Points become externally reachable.
-	// A nil policy denies all publication.
-	AllowPublication PointPolicy
-	// PointServers lists generated adapters available for allowed in-process
-	// offers.
-	PointServers []serverpoint.Registration
-	// ReservedServices are daemon-owned gRPC service names that extensions cannot
-	// publish.
-	ReservedServices []string
-	// ExtensionConfig holds configuration keyed by extension id.
-	ExtensionConfig map[extensions.ExtensionID]extensions.Config
-	// DependencyProviders are points launched extensions may call over the
-	// callback socket.
-	DependencyProviders []serverpoint.Registration
+// Option configures a [Host].
+type Option interface {
+	apply(*options)
+}
+
+type optionFunc func(*options)
+
+func (f optionFunc) apply(options *options) {
+	f(options)
+}
+
+type options struct {
+	runtimeDir          string
+	extensions          []extensions.Extension
+	dirs                []string
+	clientProviders     []clientpoint.Registration
+	providerPolicy      PointPolicy
+	publicationPolicy   PointPolicy
+	pointServers        []serverpoint.Registration
+	reservedServices    []string
+	extensionConfig     map[extensions.ExtensionID]extensions.Config
+	dependencyProviders []serverpoint.Registration
+}
+
+// WithRuntimeDir sets the directory where extension sockets are created.
+func WithRuntimeDir(dir string) Option {
+	return optionFunc(func(options *options) {
+		options.runtimeDir = dir
+	})
+}
+
+// WithExtensions adds in-process extensions to register.
+func WithExtensions(exts ...extensions.Extension) Option {
+	exts = append([]extensions.Extension(nil), exts...)
+	return optionFunc(func(options *options) {
+		options.extensions = append(options.extensions, exts...)
+	})
+}
+
+// WithDirs adds directories to scan for out-of-process extension binaries.
+func WithDirs(dirs ...string) Option {
+	dirs = append([]string(nil), dirs...)
+	return optionFunc(func(options *options) {
+		options.dirs = append(options.dirs, dirs...)
+	})
+}
+
+// WithClientProviders adds supported out-of-process points and their client
+// wiring.
+// Unlisted points are rejected unless the extension offered them only for
+// external publication.
+func WithClientProviders(providers ...clientpoint.Registration) Option {
+	providers = append([]clientpoint.Registration(nil), providers...)
+	return optionFunc(func(options *options) {
+		options.clientProviders = append(options.clientProviders, providers...)
+	})
+}
+
+// WithProviderPolicy sets the policy deciding which internally registered
+// providers are admitted.
+// A nil policy preserves registration of all declared internal providers.
+func WithProviderPolicy(policy PointPolicy) Option {
+	return optionFunc(func(options *options) {
+		options.providerPolicy = policy
+	})
+}
+
+// WithPublicationPolicy sets the policy deciding which offered points become
+// externally reachable.
+// A nil policy denies all publication.
+func WithPublicationPolicy(policy PointPolicy) Option {
+	return optionFunc(func(options *options) {
+		options.publicationPolicy = policy
+	})
+}
+
+// WithPointServers adds generated adapters available for allowed in-process
+// offers.
+func WithPointServers(servers ...serverpoint.Registration) Option {
+	servers = append([]serverpoint.Registration(nil), servers...)
+	return optionFunc(func(options *options) {
+		options.pointServers = append(options.pointServers, servers...)
+	})
+}
+
+// WithReservedServices adds daemon-owned gRPC service names that extensions
+// cannot publish.
+func WithReservedServices(services ...string) Option {
+	services = append([]string(nil), services...)
+	return optionFunc(func(options *options) {
+		options.reservedServices = append(options.reservedServices, services...)
+	})
+}
+
+// WithExtensionConfig sets configuration keyed by extension id.
+// The outer map is copied when this option is created, while configuration
+// values are shared.
+func WithExtensionConfig(config map[extensions.ExtensionID]extensions.Config) Option {
+	var copied map[extensions.ExtensionID]extensions.Config
+	if config != nil {
+		copied = make(map[extensions.ExtensionID]extensions.Config, len(config))
+		maps.Copy(copied, config)
+	}
+	return optionFunc(func(options *options) {
+		options.extensionConfig = copied
+	})
+}
+
+// WithDependencyProviders adds points launched extensions may call over the
+// callback socket.
+func WithDependencyProviders(providers ...serverpoint.Registration) Option {
+	providers = append([]serverpoint.Registration(nil), providers...)
+	return optionFunc(func(options *options) {
+		options.dependencyProviders = append(options.dependencyProviders, providers...)
+	})
 }
 
 // Host runs extensions and resolves their point providers.
@@ -136,17 +223,25 @@ func (h *Host) RegisterInProcessServices(registrar grpc.ServiceRegistrar) {
 
 // New registers, launches, and initializes the configured extensions. It tears
 // down anything started when an error occurs; loading is all-or-nothing.
-func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
-	providers, err := clientProviderMap(opts.ClientProviders)
+func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
+	var opts options
+	for _, option := range optionList {
+		if option == nil {
+			return nil, errors.New("nil host option")
+		}
+		option.apply(&opts)
+	}
+
+	providers, err := clientProviderMap(opts.clientProviders)
 	if err != nil {
 		return nil, err
 	}
-	pointServers, err := serverPointMap(opts.PointServers)
+	pointServers, err := serverPointMap(opts.pointServers)
 	if err != nil {
 		return nil, err
 	}
-	reservedServices := make(map[string]bool, len(opts.ReservedServices))
-	for _, service := range opts.ReservedServices {
+	reservedServices := make(map[string]bool, len(opts.reservedServices))
+	for _, service := range opts.reservedServices {
 		if service == "" {
 			return nil, errors.New("reserved gRPC service name is empty")
 		}
@@ -173,11 +268,11 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 
 	// Put the callback path in each handshake before starting the server.
 	callbackEndpoint := ""
-	if len(opts.DependencyProviders) > 0 {
-		callbackEndpoint = filepath.Join(opts.RuntimeDir, "callback.sock")
+	if len(opts.dependencyProviders) > 0 {
+		callbackEndpoint = filepath.Join(opts.runtimeDir, "callback.sock")
 	}
 
-	for _, ext := range opts.Extensions {
+	for _, ext := range opts.extensions {
 		decl := ext.Declaration()
 		identity := extensions.ExtensionIdentity{
 			ID:     decl.ID,
@@ -186,10 +281,10 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 		if err := validateHostIdentity(identity, decl); err != nil {
 			return nil, err
 		}
-		if err := admitProviders(identity, decl.Providers, opts.AllowProvider); err != nil {
+		if err := admitProviders(identity, decl.Providers, opts.providerPolicy); err != nil {
 			return nil, err
 		}
-		services, err := collectInProcessPublications(identity, ext, opts.AllowPublication, pointServers, publishedServices, publishedOwners, reservedServices)
+		services, err := collectInProcessPublications(identity, ext, opts.publicationPolicy, pointServers, publishedServices, publishedOwners, reservedServices)
 		if err != nil {
 			return nil, err
 		}
@@ -199,11 +294,11 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 		}
 	}
 	l := launcher.Launcher{
-		RuntimeDir:       opts.RuntimeDir,
-		ExtensionConfig:  opts.ExtensionConfig,
+		RuntimeDir:       opts.runtimeDir,
+		ExtensionConfig:  opts.extensionConfig,
 		CallbackEndpoint: callbackEndpoint,
 	}
-	for _, dir := range opts.Dirs {
+	for _, dir := range opts.dirs {
 		bins, err := launcher.Binaries(ctx, dir)
 		if err != nil {
 			return nil, err
@@ -219,10 +314,10 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 			if err := validateHostIdentity(identity, decl); err != nil {
 				return nil, err
 			}
-			if err := admitProviders(identity, decl.Providers, opts.AllowProvider); err != nil {
+			if err := admitProviders(identity, decl.Providers, opts.providerPolicy); err != nil {
 				return nil, err
 			}
-			if err := approveProcessPublications(identity, started, opts.AllowPublication, publishedServices, publishedOwners, reservedServices); err != nil {
+			if err := approveProcessPublications(identity, started, opts.publicationPolicy, publishedServices, publishedOwners, reservedServices); err != nil {
 				return nil, err
 			}
 			if err := b.Register(identity, loadedExt.extension); err != nil {
@@ -233,7 +328,7 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 	}
 
 	// Check single-provider constraints across all registered extensions.
-	for _, reg := range opts.ClientProviders {
+	for _, reg := range opts.clientProviders {
 		if !reg.Single {
 			continue
 		}
@@ -250,13 +345,13 @@ func New(ctx context.Context, opts Options) (_ *Host, retErr error) {
 	// Serve dependencies before initialization so dependency callbacks reach an
 	// initialized provider.
 	if callbackEndpoint != "" {
-		callback, err = serveCallback(callbackEndpoint, opts.DependencyProviders, b)
+		callback, err = serveCallback(callbackEndpoint, opts.dependencyProviders, b)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if err := b.Init(ctx, opts.ExtensionConfig); err != nil {
+	if err := b.Init(ctx, opts.extensionConfig); err != nil {
 		return nil, err
 	}
 	return &Host{broker: b, conns: conns, loaded: loaded, publishedServices: publishedServices, inProcessServices: inProcessServices, callback: callback}, nil

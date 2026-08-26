@@ -9,14 +9,12 @@ import (
 	"time"
 
 	"github.com/moby/extensions"
-	"github.com/moby/extensions/clientpoint"
 	greeterv0 "github.com/moby/extensions/example/greeter/v0"
 	greeterpb "github.com/moby/extensions/example/greeter/v0/protogen"
 	"github.com/moby/extensions/grpcproxy"
 	"github.com/moby/extensions/host"
 	echov1 "github.com/moby/extensions/internal/launcher/echo/v1"
 	echopb "github.com/moby/extensions/internal/launcher/echo/v1/protogen"
-	"github.com/moby/extensions/serverpoint"
 	"github.com/moby/extensions/testdata/greeter"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -43,18 +41,18 @@ func TestPointSocketExposure(t *testing.T) {
 
 	var publicationIdentity extensions.ExtensionIdentity
 	providerPolicyCalls := 0
-	h, err := host.New(ctx, host.Options{
-		RuntimeDir: shortTempDir(t),
-		Dirs:       []string{dir},
-		AllowProvider: host.PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool {
+	h, err := host.New(ctx,
+		host.WithRuntimeDir(shortTempDir(t)),
+		host.WithDirs(dir),
+		host.WithProviderPolicy(host.PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool {
 			providerPolicyCalls++
 			return false
-		}),
-		AllowPublication: host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+		})),
+		host.WithPublicationPolicy(host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 			publicationIdentity = identity
 			return identity.ID == greeter.ID && point == greeterv0.Point.ID()
-		}),
-	})
+		})),
+	)
 	assert.NilError(t, err)
 	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
 	assert.DeepEqual(t, publicationIdentity, extensions.ExtensionIdentity{
@@ -115,11 +113,11 @@ func TestProcessOfferIsDeniedByDefault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	h, err := host.New(ctx, host.Options{
-		RuntimeDir:      shortTempDir(t),
-		Dirs:            []string{dir},
-		ClientProviders: []clientpoint.Registration{echopb.ClientPoint},
-	})
+	h, err := host.New(ctx,
+		host.WithRuntimeDir(shortTempDir(t)),
+		host.WithDirs(dir),
+		host.WithClientProviders(echopb.ClientPoint),
+	)
 	assert.NilError(t, err)
 	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
 
@@ -138,17 +136,15 @@ func TestProcessOfferIsDeniedByDefault(t *testing.T) {
 func TestInProcessPointExposure(t *testing.T) {
 	ctx := context.Background()
 	var publicationIdentity extensions.ExtensionIdentity
-	h, err := host.New(ctx, host.Options{
-		RuntimeDir: shortTempDir(t),
-		Extensions: []extensions.Extension{greeter.Extension},
-		PointServers: []serverpoint.Registration{
-			greeterpb.ServerPoint,
-		},
-		AllowPublication: host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+	h, err := host.New(ctx,
+		host.WithRuntimeDir(shortTempDir(t)),
+		host.WithExtensions(greeter.Extension),
+		host.WithPointServers(greeterpb.ServerPoint),
+		host.WithPublicationPolicy(host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 			publicationIdentity = identity
 			return identity.ID == greeter.ID && point == greeterv0.Point.ID()
-		}),
-	})
+		})),
+	)
 	assert.NilError(t, err)
 	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
 	assert.Equal(t, publicationIdentity, extensions.ExtensionIdentity{

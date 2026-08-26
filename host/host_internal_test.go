@@ -301,20 +301,20 @@ func TestSinglePointRejectsTwoProviders(t *testing.T) {
 		Single:   true,
 	}
 
-	_, err := New(context.Background(), Options{
-		RuntimeDir:      t.TempDir(),
-		Extensions:      []extensions.Extension{ext("org.example.one.v1"), ext("org.example.two.v1")},
-		ClientProviders: []clientpoint.Registration{singleReg},
-	})
+	_, err := New(context.Background(),
+		WithRuntimeDir(t.TempDir()),
+		WithExtensions(ext("org.example.one.v1"), ext("org.example.two.v1")),
+		WithClientProviders(singleReg),
+	)
 	assert.ErrorContains(t, err, `point "org.example.decider.v1" admits a single provider`)
 	assert.ErrorContains(t, err, "org.example.one.v1")
 	assert.ErrorContains(t, err, "org.example.two.v1")
 
-	h, err := New(context.Background(), Options{
-		RuntimeDir:      t.TempDir(),
-		Extensions:      []extensions.Extension{ext("org.example.one.v1")},
-		ClientProviders: []clientpoint.Registration{singleReg},
-	})
+	h, err := New(context.Background(),
+		WithRuntimeDir(t.TempDir()),
+		WithExtensions(ext("org.example.one.v1")),
+		WithClientProviders(singleReg),
+	)
 	assert.NilError(t, err)
 	assert.NilError(t, h.Shutdown(context.Background()))
 }
@@ -327,25 +327,25 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 	var gotIdentity extensions.ExtensionIdentity
 	var gotPoint extensions.PointID
 
-	_, err := New(context.Background(), Options{
-		RuntimeDir: t.TempDir(),
-		Extensions: []extensions.Extension{ext},
-		AllowProvider: PointPolicyFunc(func(identity extensions.ExtensionIdentity, policyPoint extensions.PointID) bool {
+	_, err := New(context.Background(),
+		WithRuntimeDir(t.TempDir()),
+		WithExtensions(ext),
+		WithProviderPolicy(PointPolicyFunc(func(identity extensions.ExtensionIdentity, policyPoint extensions.PointID) bool {
 			gotIdentity = identity
 			gotPoint = policyPoint
 			return false
-		}),
-	})
+		})),
+	)
 	assert.ErrorContains(t, err, `extension "org.example.provider.v1"`)
 	assert.ErrorContains(t, err, `origin "builtin"`)
 	assert.ErrorContains(t, err, `point "org.example.internal.v1"`)
 	assert.Equal(t, gotIdentity, wantIdentity)
 	assert.Equal(t, gotPoint, point)
 
-	h, err := New(context.Background(), Options{
-		RuntimeDir: t.TempDir(),
-		Extensions: []extensions.Extension{ext},
-	})
+	h, err := New(context.Background(),
+		WithRuntimeDir(t.TempDir()),
+		WithExtensions(ext),
+	)
 	assert.NilError(t, err)
 	t.Cleanup(func() { assert.NilError(t, h.Shutdown(context.Background())) })
 	providers := h.Providers(point)
@@ -355,8 +355,8 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 
 // TestProviderAdmissionSkipsServiceV0Offer verifies that the servicev0 offer
 // marker in a declaration is transparent to provider admission policy.
-// Publication is governed solely by AllowPublication; the marker must never
-// reach AllowProvider.
+// Publication is governed solely by WithPublicationPolicy; the marker must
+// never reach WithProviderPolicy.
 func TestProviderAdmissionSkipsServiceV0Offer(t *testing.T) {
 	const id = extensions.ExtensionID("org.example.offered.v1")
 	const realPoint = extensions.PointID("org.example.internal.v1")
@@ -369,14 +369,14 @@ func TestProviderAdmissionSkipsServiceV0Offer(t *testing.T) {
 		},
 	})
 	var policyPoints []extensions.PointID
-	h, err := New(context.Background(), Options{
-		RuntimeDir: t.TempDir(),
-		Extensions: []extensions.Extension{ext},
-		AllowProvider: PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) bool {
+	h, err := New(context.Background(),
+		WithRuntimeDir(t.TempDir()),
+		WithExtensions(ext),
+		WithProviderPolicy(PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) bool {
 			policyPoints = append(policyPoints, point)
 			return point == realPoint
-		}),
-	})
+		})),
+	)
 	assert.NilError(t, err)
 	t.Cleanup(func() { assert.NilError(t, h.Shutdown(context.Background())) })
 	assert.DeepEqual(t, policyPoints, []extensions.PointID{realPoint})
@@ -414,16 +414,16 @@ func TestProcessResourceCleanup(t *testing.T) {
 	t.Run("provider policy denial", func(t *testing.T) {
 		probeFile := filepath.Join(t.TempDir(), "probe")
 		var gotIdentity extensions.ExtensionIdentity
-		_, err := New(ctx, Options{
-			RuntimeDir:      shortTempDir(t),
-			Dirs:            []string{dir},
-			ClientProviders: []clientpoint.Registration{echopb.ClientPoint},
-			ExtensionConfig: processProbeConfig(probeFile, false),
-			AllowProvider: PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+		_, err := New(ctx,
+			WithRuntimeDir(shortTempDir(t)),
+			WithDirs(dir),
+			WithClientProviders(echopb.ClientPoint),
+			WithExtensionConfig(processProbeConfig(probeFile, false)),
+			WithProviderPolicy(PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 				gotIdentity = identity
 				return false
-			}),
-		})
+			})),
+		)
 		assert.ErrorContains(t, err, `extension "org.example.lifecycle.v1"`)
 		assert.ErrorContains(t, err, `origin "executable"`)
 		assert.ErrorContains(t, err, `point "moby.extensions.internal.launcher.echo.v1"`)
@@ -443,15 +443,15 @@ func TestProcessResourceCleanup(t *testing.T) {
 
 	t.Run("register error", func(t *testing.T) {
 		probeFile := filepath.Join(t.TempDir(), "probe")
-		_, err := New(ctx, Options{
-			RuntimeDir: shortTempDir(t),
-			Extensions: []extensions.Extension{extensions.New(extensions.Declaration{
+		_, err := New(ctx,
+			WithRuntimeDir(shortTempDir(t)),
+			WithExtensions(extensions.New(extensions.Declaration{
 				ID: lifecycleExtensionID,
-			})},
-			Dirs:            []string{dir},
-			ClientProviders: []clientpoint.Registration{echopb.ClientPoint},
-			ExtensionConfig: processProbeConfig(probeFile, false),
-		})
+			})),
+			WithDirs(dir),
+			WithClientProviders(echopb.ClientPoint),
+			WithExtensionConfig(processProbeConfig(probeFile, false)),
+		)
 		assert.ErrorContains(t, err, "already registered")
 		assertProcessReleased(t, probeFile)
 	})
@@ -485,13 +485,13 @@ func TestProcessResourceCleanup(t *testing.T) {
 			},
 		})
 
-		_, err := New(ctx, Options{
-			RuntimeDir:      shortTempDir(t),
-			Extensions:      []extensions.Extension{initializedBuiltin},
-			Dirs:            []string{dir},
-			ClientProviders: []clientpoint.Registration{echopb.ClientPoint},
-			ExtensionConfig: processProbeConfig(probeFile, true),
-		})
+		_, err := New(ctx,
+			WithRuntimeDir(shortTempDir(t)),
+			WithExtensions(initializedBuiltin),
+			WithDirs(dir),
+			WithClientProviders(echopb.ClientPoint),
+			WithExtensionConfig(processProbeConfig(probeFile, true)),
+		)
 		assert.ErrorContains(t, err, "requested initialization failure")
 		assert.Assert(t, semanticShutdownCalled)
 		assert.NilError(t, probeObservationErr)
@@ -504,15 +504,15 @@ func TestProcessResourceCleanup(t *testing.T) {
 
 	t.Run("normal shutdown", func(t *testing.T) {
 		probeFile := filepath.Join(t.TempDir(), "probe")
-		h, err := New(ctx, Options{
-			RuntimeDir: shortTempDir(t),
-			Extensions: []extensions.Extension{extensions.New(extensions.Declaration{
+		h, err := New(ctx,
+			WithRuntimeDir(shortTempDir(t)),
+			WithExtensions(extensions.New(extensions.Declaration{
 				ID: "org.example.builtin.v1",
-			})},
-			Dirs:            []string{dir},
-			ClientProviders: []clientpoint.Registration{echopb.ClientPoint},
-			ExtensionConfig: processProbeConfig(probeFile, false),
-		})
+			})),
+			WithDirs(dir),
+			WithClientProviders(echopb.ClientPoint),
+			WithExtensionConfig(processProbeConfig(probeFile, false)),
+		)
 		assert.NilError(t, err)
 		shutdown := false
 		t.Cleanup(func() {

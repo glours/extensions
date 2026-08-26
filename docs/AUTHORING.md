@@ -235,14 +235,14 @@ Providers: []extensions.Provider{
 The Host defaults to deny. Allow an offer only through explicit policy:
 
 ```go
-AllowPublication: host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+_, err := host.New(ctx, host.WithPublicationPolicy(host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 	return identity.ID == "org.example.greeter.v1" && point == greeterv0.Point.ID()
-}),
+})))
 ```
 
 Publication policy receives the host-attested identity. Internal provider
-admission is a separate option with different nil behavior: a nil
-`AllowProvider` preserves all internally wired providers, while a non-nil
+admission is a separate option with different nil behavior: a
+`WithProviderPolicy(nil)` preserves all internally wired providers, while a non-nil
 policy can reject loading by identity and Point. Offered-only process Points
 without `ClientPoint` wiring are publication-only and do not invoke provider
 policy.
@@ -252,7 +252,7 @@ it is governed solely by publication policy.
 For an in-process extension, supply generated adapters at Host composition:
 
 ```go
-PointServers: []serverpoint.Registration{greeterpb.ServerPoint},
+host.WithPointServers(greeterpb.ServerPoint),
 ```
 
 A separate binary passes every ordinary provider's generated `ServerPoint` to
@@ -423,7 +423,8 @@ func builtinExtensions(cfg *config.Config) []extensions.Extension {
 ```
 
 Built-ins use the same registration path as launched binaries.
-Their config is delivered by id through `host.Options.ExtensionConfig`.
+Their config is delivered by id through
+`host.WithExtensionConfig(extensionConfig)`.
 
 ### Run out-of-process
 
@@ -467,7 +468,7 @@ Health checks, reconnect, and restart are future work in [ROADMAP.md](./ROADMAP.
 - [ ] Register every ordinary provider's `ServerPoint` in a separate binary.
 - [ ] Implement every published API as an ordinary `Point.Provide(impl)` provider.
 - [ ] Offer selected implemented Points with `servicev0.Offer`.
-- [ ] Add Host publication policy and in-process `PointServers` wiring as needed.
+- [ ] Add Host publication policy and in-process `WithPointServers` wiring as needed.
 - [ ] Keep handshake output on stdout and logs on stderr.
 - [ ] Install one correctly named, non-world-writable binary in the trusted extension directory.
 
@@ -478,8 +479,8 @@ Health checks, reconnect, and restart are future work in [ROADMAP.md](./ROADMAP.
 | Define a point | `extpoints/<area>/<name>/v0/<name>.go` | Go interface, `pb` messages, `DefinePoint`, helpers |
 | Name its wire service | same contract file | inferred `<PointID>.<InterfaceName>` |
 | Offer an ordinary point | extension declaration | implement it with `Point.Provide` and name it in `servicev0.Offer` |
-| Authorize an internal provider | host options | set identity-aware `AllowProvider`; nil preserves registration |
-| Authorize publication | host options | set default-deny `AllowPublication`; supply `PointServers` for in-process offers |
+| Authorize an internal provider | host functional options | set identity-aware `WithProviderPolicy`; nil preserves registration |
+| Authorize publication | host functional options | set default-deny `WithPublicationPolicy`; supply `WithPointServers` for in-process offers |
 | Invoke a published point | external caller | use generated `NewClient(hostConn)` |
 | Serve an ordinary point | SDK or dependency wiring | pass its generated `ServerPoint` |
 | Wire it | `extpoints/<area>/<name>/v0/<name>.go` | package doc and identical `//go:generate` |

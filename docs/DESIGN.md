@@ -150,10 +150,10 @@ Providers: []extensions.Provider{
 ```
 
 `servicev0.Offer` carries no transport registration and grants no publication
-authority. The Host applies `AllowPublication(identity, point)` and denies all
-offers when the policy is nil.
-Separately, `AllowProvider(identity, point)` admits providers wired for internal
-Host use; a nil provider policy preserves their registration.
+authority. The Host applies the policy supplied through
+`WithPublicationPolicy` and denies all offers when the policy is nil.
+Separately, `WithProviderPolicy` admits providers wired for internal Host use; a
+nil provider policy preserves their registration.
 Provider denial fails loading and does not filter the declaration.
 An offered-only process Point without Host client wiring remains governed only
 by publication policy.
@@ -167,7 +167,7 @@ may omit `ClientPoint` wiring for an offered-only Point; add it when the daemon
 also calls that Point internally.
 
 For in-process offers, Host composition supplies generated adapters through
-`PointServers`. The Host resolves the implementation from the same extension,
+`WithPointServers`. The Host resolves the implementation from the same extension,
 applies policy, and preflights daemon-reserved, process, and in-process service
 name collisions before registration.
 

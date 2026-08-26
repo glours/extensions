@@ -96,11 +96,11 @@ An offer is not authorization. The Host defaults to deny and applies policy per
 host-attested extension identity and Point:
 
 ```go
-AllowPublication: host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+_, err := host.New(ctx, host.WithPublicationPolicy(host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 	return identity.ID == "org.example.greeter.v1" &&
 		identity.Origin.Kind == extensions.ExtensionOriginExecutable &&
 		point == greeterv0.Point.ID()
-}),
+})))
 ```
 
 For a separate binary, pass each implemented Point's generated adapter at the
@@ -110,7 +110,8 @@ process composition boundary:
 sdk.Main(extension, greeterpb.ServerPoint)
 ```
 
-For an in-process extension, supply the adapter through `host.Options.PointServers`.
+For an in-process extension, pass the adapter to `host.New` through
+`host.WithPointServers(greeterpb.ServerPoint)`.
 An in-process provider has no private SDK gRPC server, so the Host needs this
 generated registration logic to translate protobuf requests into calls on the
 Go implementation.

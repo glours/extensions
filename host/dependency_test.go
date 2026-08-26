@@ -14,7 +14,6 @@ import (
 	greeterv0 "github.com/moby/extensions/example/greeter/v0"
 	greeterpb "github.com/moby/extensions/example/greeter/v0/protogen"
 	"github.com/moby/extensions/host"
-	"github.com/moby/extensions/serverpoint"
 	"github.com/moby/extensions/testdata/greeterdep"
 	"gotest.tools/v3/assert"
 )
@@ -64,12 +63,12 @@ func TestOutOfProcessDependency(t *testing.T) {
 		Providers: []extensions.Provider{greeterv0.Point.Provide(recordingGreeter{calls: &calls})},
 	})
 
-	h, err := host.New(ctx, host.Options{
-		RuntimeDir:          shortTempDir(t),
-		Extensions:          []extensions.Extension{greeter},
-		Dirs:                []string{dir},
-		DependencyProviders: []serverpoint.Registration{greeterpb.ServerPoint},
-	})
+	h, err := host.New(ctx,
+		host.WithRuntimeDir(shortTempDir(t)),
+		host.WithExtensions(greeter),
+		host.WithDirs(dir),
+		host.WithDependencyProviders(greeterpb.ServerPoint),
+	)
 	assert.NilError(t, err)
 	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
 
