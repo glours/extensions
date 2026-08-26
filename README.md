@@ -92,21 +92,27 @@ Providers: []extensions.Provider{
 }
 ```
 
-An offer is not authorization. The Host defaults to deny and applies policy to
-the host-attested extension identity and `servicev0.Point.ID()`:
+An offer is not authorization. The Host applies policy to the host-attested
+extension identity and `servicev0.Point.ID()`:
 
 ```go
-_, err := host.New(ctx, host.WithProviderPolicy(host.PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
-	return identity.ID == "org.example.greeter.v1" &&
+_, err := host.New(ctx, host.WithProviderPolicy(host.PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) host.PointPolicyResult {
+	if identity.ID == "org.example.greeter.v1" &&
 		identity.Origin.Kind == extensions.ExtensionOriginExecutable &&
-		(point == greeterv0.Point.ID() || point == servicev0.Point.ID())
+		(point == greeterv0.Point.ID() || point == servicev0.Point.ID()) {
+		return host.Allow()
+	}
+	return host.Drop()
 })))
 ```
 
 Publication policy receives the host-attested identity. Internal provider
 admission uses the same callback with ordinary Point IDs. A nil policy preserves
-all internally wired providers and denies publication. Offered-only process
+all internally wired providers and drops publication. Offered-only process
 Points consult the policy only with `servicev0.Point.ID()`.
+`Allow` keeps the requested provider use, `Drop` silently omits it, and `Reject`
+fails Host construction while preserving its error cause. A zero result and a
+typed nil `PointPolicyFunc` reject the request.
 
 For a separate binary, pass each implemented Point's generated adapter at the
 process composition boundary:

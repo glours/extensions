@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -45,10 +46,13 @@ func TestPointSocketExposure(t *testing.T) {
 	h, err := host.New(ctx,
 		host.WithRuntimeDir(shortTempDir(t)),
 		host.WithDirs(dir),
-		host.WithProviderPolicy(host.PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+		host.WithProviderPolicy(host.PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) host.PointPolicyResult {
 			policyPoints = append(policyPoints, point)
 			policyIdentity = identity
-			return identity.ID == greeter.ID && point == servicev0.Point.ID()
+			if identity.ID == greeter.ID && point == servicev0.Point.ID() {
+				return host.Allow()
+			}
+			return host.Drop()
 		})),
 	)
 	assert.NilError(t, err)
@@ -92,9 +96,9 @@ func TestPointSocketExposure(t *testing.T) {
 	assert.Equal(t, resp.Message, "hello world")
 }
 
-// TestProcessOfferIsDeniedByDefault verifies a nil Host policy keeps an offered
-// Point private without affecting its internal client wiring.
-func TestProcessOfferIsDeniedByDefault(t *testing.T) {
+// TestProcessOfferIsDroppedByDefault verifies a nil Host policy keeps an
+// offered Point private without affecting its internal client wiring.
+func TestProcessOfferIsDroppedByDefault(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and launches a helper binary")
 	}
@@ -128,7 +132,7 @@ func TestProcessOfferIsDeniedByDefault(t *testing.T) {
 	assert.Equal(t, resp.GetMessage(), "private")
 }
 
-func TestProcessOfferDeniedByProviderPolicy(t *testing.T) {
+func TestProcessOfferPolicy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and launches a helper binary")
 	}
@@ -144,20 +148,36 @@ func TestProcessOfferDeniedByProviderPolicy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	policyCalls := 0
-	h, err := host.New(ctx,
-		host.WithRuntimeDir(shortTempDir(t)),
-		host.WithDirs(dir),
-		host.WithProviderPolicy(host.PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool {
-			policyCalls++
-			return false
-		})),
-	)
-	assert.NilError(t, err)
-	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+	t.Run("drop", func(t *testing.T) {
+		policyCalls := 0
+		h, err := host.New(ctx,
+			host.WithRuntimeDir(shortTempDir(t)),
+			host.WithDirs(dir),
+			host.WithProviderPolicy(host.PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) host.PointPolicyResult {
+				policyCalls++
+				return host.Drop()
+			})),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
 
-	assert.Equal(t, policyCalls, 1)
-	assert.Check(t, h.PublishedServicesForPoint(echov1.Point.ID())[id] == nil)
+		assert.Equal(t, policyCalls, 1)
+		assert.Check(t, h.PublishedServicesForPoint(echov1.Point.ID())[id] == nil)
+	})
+
+	t.Run("reject", func(t *testing.T) {
+		cause := errors.New("publication denied")
+		h, err := host.New(ctx,
+			host.WithRuntimeDir(shortTempDir(t)),
+			host.WithDirs(dir),
+			host.WithProviderPolicy(host.PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) host.PointPolicyResult {
+				return host.Reject(cause)
+			})),
+		)
+		assert.Assert(t, h == nil)
+		assert.Assert(t, errors.Is(err, cause))
+		assert.ErrorContains(t, err, `publish offered points for extension "org.example.exthook.v1"`)
+	})
 }
 
 // TestInProcessPointExposure verifies a published Point can be collected and
@@ -170,10 +190,13 @@ func TestInProcessPointExposure(t *testing.T) {
 		host.WithRuntimeDir(shortTempDir(t)),
 		host.WithExtensions(greeter.Extension),
 		host.WithPointServers(greeterpb.ServerPoint),
-		host.WithProviderPolicy(host.PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+		host.WithProviderPolicy(host.PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) host.PointPolicyResult {
 			policyPoints = append(policyPoints, point)
 			policyIdentity = identity
-			return identity.ID == greeter.ID && (point == greeterv0.Point.ID() || point == servicev0.Point.ID())
+			if identity.ID == greeter.ID && (point == greeterv0.Point.ID() || point == servicev0.Point.ID()) {
+				return host.Allow()
+			}
+			return host.Drop()
 		})),
 	)
 	assert.NilError(t, err)

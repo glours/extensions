@@ -23,19 +23,81 @@ import (
 	"google.golang.org/grpc"
 )
 
+type pointPolicyAction uint8
+
+const (
+	pointPolicyActionUnspecified pointPolicyAction = iota
+	pointPolicyActionAllow
+	pointPolicyActionDrop
+	pointPolicyActionReject
+)
+
+var (
+	errPolicyRejected           = errors.New("point policy rejected the requested use")
+	errInvalidPointPolicyResult = errors.New("point policy returned an invalid or unspecified result")
+)
+
+// PointPolicyResult is an opaque provider-policy decision.
+// Its zero value rejects the requested use as an invalid or unspecified
+// decision.
+type PointPolicyResult struct {
+	action pointPolicyAction
+	cause  error
+}
+
+// Allow returns a decision that keeps an ordinary provider or publishes an
+// offered set.
+func Allow() PointPolicyResult {
+	return PointPolicyResult{action: pointPolicyActionAllow}
+}
+
+// Drop returns a decision that silently omits an ordinary provider or leaves an
+// offered set private.
+func Drop() PointPolicyResult {
+	return PointPolicyResult{action: pointPolicyActionDrop}
+}
+
+// Reject returns a decision that fails Host construction with cause.
+// A nil cause produces a generic policy-rejection error.
+func Reject(cause error) PointPolicyResult {
+	return PointPolicyResult{action: pointPolicyActionReject, cause: cause}
+}
+
+func (result PointPolicyResult) resolve() (pointPolicyAction, error) {
+	switch result.action {
+	case pointPolicyActionAllow, pointPolicyActionDrop:
+		if result.cause != nil {
+			return pointPolicyActionReject, errInvalidPointPolicyResult
+		}
+		return result.action, nil
+	case pointPolicyActionReject:
+		if result.cause == nil {
+			return pointPolicyActionReject, errPolicyRejected
+		}
+		return pointPolicyActionReject, result.cause
+	default:
+		return pointPolicyActionReject, errInvalidPointPolicyResult
+	}
+}
+
 // PointPolicy decides whether an extension identity may provide a Point.
-// The servicev0 metadata Point controls publication.
+// A decision on servicev0.Point.ID() controls publication of the complete
+// offered set.
+// A nil policy allows ordinary providers and drops publication.
 type PointPolicy interface {
-	Allow(identity extensions.ExtensionIdentity, point extensions.PointID) bool
+	Decide(identity extensions.ExtensionIdentity, point extensions.PointID) PointPolicyResult
 }
 
 // PointPolicyFunc adapts a function to [PointPolicy].
-type PointPolicyFunc func(identity extensions.ExtensionIdentity, point extensions.PointID) bool
+type PointPolicyFunc func(identity extensions.ExtensionIdentity, point extensions.PointID) PointPolicyResult
 
-// Allow calls f.
-// A nil function denies the requested Point use.
-func (f PointPolicyFunc) Allow(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
-	return f != nil && f(identity, point)
+// Decide calls f.
+// A nil function rejects the requested Point use with a generic cause.
+func (f PointPolicyFunc) Decide(identity extensions.ExtensionIdentity, point extensions.PointID) PointPolicyResult {
+	if f == nil {
+		return Reject(nil)
+	}
+	return f(identity, point)
 }
 
 // Option configures a [Host].
@@ -97,7 +159,7 @@ func WithClientProviders(providers ...clientpoint.Registration) Option {
 
 // WithProviderPolicy sets the policy deciding which providers are admitted.
 // A decision on servicev0.Point.ID() controls publication.
-// A nil policy admits all internally wired providers but denies publication.
+// A nil policy admits all internally wired providers but drops publication.
 func WithProviderPolicy(policy PointPolicy) Option {
 	return optionFunc(func(options *options) {
 		options.providerPolicy = policy
@@ -266,7 +328,8 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 		if err := validateHostIdentity(identity, decl); err != nil {
 			return nil, err
 		}
-		if err := admitProviders(identity, decl.Providers, policy); err != nil {
+		admittedProviders, err := admitProviders(identity, decl.Providers, policy)
+		if err != nil {
 			return nil, err
 		}
 		services, err := collectInProcessPublications(identity, ext, policy, pointServers, publishedServices, publishedOwners, reservedServices)
@@ -274,7 +337,8 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 			return nil, err
 		}
 		inProcessServices = append(inProcessServices, services...)
-		if err := b.Register(identity, ext); err != nil {
+		decl.Providers = admittedProviders
+		if err := b.Register(identity, extensions.New(decl)); err != nil {
 			return nil, err
 		}
 	}
@@ -299,13 +363,15 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 			if err := validateHostIdentity(identity, decl); err != nil {
 				return nil, err
 			}
-			if err := admitProviders(identity, decl.Providers, policy); err != nil {
+			admittedProviders, err := admitProviders(identity, decl.Providers, policy)
+			if err != nil {
 				return nil, err
 			}
 			if err := approveProcessPublications(identity, started, policy, publishedServices, publishedOwners, reservedServices); err != nil {
 				return nil, err
 			}
-			if err := b.Register(identity, loadedExt.extension); err != nil {
+			decl.Providers = admittedProviders
+			if err := b.Register(identity, extensions.New(decl)); err != nil {
 				return nil, err
 			}
 			conns[identity.ID] = started.Conn
@@ -352,27 +418,44 @@ func validateHostIdentity(identity extensions.ExtensionIdentity, decl extensions
 	return nil
 }
 
-func admitProviders(identity extensions.ExtensionIdentity, providers []extensions.Provider, policy PointPolicy) error {
-	if policy == nil {
-		return nil
-	}
+func admitProviders(identity extensions.ExtensionIdentity, providers []extensions.Provider, policy PointPolicy) ([]extensions.Provider, error) {
+	admitted := make([]extensions.Provider, 0, len(providers))
 	for _, provider := range providers {
 		if extensions.IsMetadataPoint(provider.Point) {
+			admitted = append(admitted, provider)
 			continue
 		}
-		if !policy.Allow(identity, provider.Point) {
-			return fmt.Errorf("extension %q with origin %q is not allowed to provide point %q", identity.ID, identity.Origin.Kind, provider.Point)
+		result := Allow()
+		if policy != nil {
+			result = policy.Decide(identity, provider.Point)
+		}
+		action, cause := result.resolve()
+		switch action {
+		case pointPolicyActionAllow:
+			admitted = append(admitted, provider)
+		case pointPolicyActionDrop:
+			continue
+		default:
+			return nil, policyRejectionError("admit provider", identity, provider.Point, cause)
 		}
 	}
-	return nil
+	return admitted, nil
 }
 
 func approveProcessPublications(identity extensions.ExtensionIdentity, started *launcher.Launched, policy PointPolicy, published map[extensions.ExtensionID]map[extensions.PointID][]string, owners map[string]extensions.ExtensionID, reserved map[string]bool) error {
-	if len(started.OfferedPoints) == 0 || policy == nil {
+	if len(started.OfferedPoints) == 0 {
 		return nil
 	}
-	if !policy.Allow(identity, servicev0.Point.ID()) {
+	result := Drop()
+	if policy != nil {
+		result = policy.Decide(identity, servicev0.Point.ID())
+	}
+	action, cause := result.resolve()
+	switch action {
+	case pointPolicyActionDrop:
 		return nil
+	case pointPolicyActionReject:
+		return policyRejectionError("publish offered points", identity, servicev0.Point.ID(), cause)
 	}
 	for _, point := range started.OfferedPoints {
 		names := started.ProviderServices[point]
@@ -434,8 +517,19 @@ func collectInProcessPublications(identity extensions.ExtensionIdentity, ext ext
 			offered = append(offered, point)
 		}
 	}
-	if len(offered) == 0 || policy == nil || !policy.Allow(identity, servicev0.Point.ID()) {
+	if len(offered) == 0 {
 		return nil, nil
+	}
+	result := Drop()
+	if policy != nil {
+		result = policy.Decide(identity, servicev0.Point.ID())
+	}
+	action, cause := result.resolve()
+	switch action {
+	case pointPolicyActionDrop:
+		return nil, nil
+	case pointPolicyActionReject:
+		return nil, policyRejectionError("publish offered points", identity, servicev0.Point.ID(), cause)
 	}
 
 	var services []servicegrpc.Service
@@ -463,6 +557,13 @@ func collectInProcessPublications(identity extensions.ExtensionIdentity, ext ext
 		published[decl.ID][point] = []string{service.Name}
 	}
 	return services, nil
+}
+
+func policyRejectionError(operation string, identity extensions.ExtensionIdentity, point extensions.PointID, cause error) error {
+	if executable := identity.Origin.Executable; executable != nil {
+		return fmt.Errorf("%s for extension %q with origin %q at %q for point %q: %w", operation, identity.ID, identity.Origin.Kind, executable.Path, point, cause)
+	}
+	return fmt.Errorf("%s for extension %q with origin %q for point %q: %w", operation, identity.ID, identity.Origin.Kind, point, cause)
 }
 
 // serveCallback starts the server for launched extensions' declared

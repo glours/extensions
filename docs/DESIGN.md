@@ -152,10 +152,13 @@ Providers: []extensions.Provider{
 
 `servicev0.Offer` carries no transport registration and grants no publication
 authority. The Host applies `WithProviderPolicy` to `servicev0.Point.ID()` and
-denies all offers when the policy is nil.
+drops all offers when the policy is nil.
 The same policy admits providers wired for internal Host use by ordinary Point
 ID; a nil policy preserves their registration.
-Provider denial fails loading and does not filter the declaration.
+An `Allow` decision keeps the provider use, `Drop` omits it, and `Reject` fails
+Host construction while preserving its error cause.
+The zero result rejects as invalid or unspecified, and a typed nil
+`PointPolicyFunc` rejects with a generic cause.
 An offered-only process Point without Host client wiring is governed only by
 the servicev0 policy decision.
 The servicev0 marker is exempt from provider admission and controls publication

@@ -319,35 +319,109 @@ func TestSinglePointRejectsTwoProviders(t *testing.T) {
 func TestProviderAdmissionPolicy(t *testing.T) {
 	const point = extensions.PointID("org.example.internal.v1")
 	const id = extensions.ExtensionID("org.example.provider.v1")
-	ext := newProviderExtension(id, point)
 	wantIdentity := extensions.ExtensionIdentity{ID: id, Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin}}
-	var gotIdentity extensions.ExtensionIdentity
-	var gotPoint extensions.PointID
 
-	_, err := New(context.Background(),
-		WithRuntimeDir(t.TempDir()),
-		WithExtensions(ext),
-		WithProviderPolicy(PointPolicyFunc(func(identity extensions.ExtensionIdentity, policyPoint extensions.PointID) bool {
-			gotIdentity = identity
-			gotPoint = policyPoint
-			return false
-		})),
-	)
-	assert.ErrorContains(t, err, `extension "org.example.provider.v1"`)
-	assert.ErrorContains(t, err, `origin "builtin"`)
-	assert.ErrorContains(t, err, `point "org.example.internal.v1"`)
-	assert.Equal(t, gotIdentity, wantIdentity)
-	assert.Equal(t, gotPoint, point)
+	t.Run("allow keeps provider", func(t *testing.T) {
+		var gotIdentity extensions.ExtensionIdentity
+		var gotPoint extensions.PointID
+		h, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(newProviderExtension(id, point)),
+			WithProviderPolicy(PointPolicyFunc(func(identity extensions.ExtensionIdentity, policyPoint extensions.PointID) PointPolicyResult {
+				gotIdentity = identity
+				gotPoint = policyPoint
+				return Allow()
+			})),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		providers := h.Providers(point)
+		assert.Equal(t, len(providers), 1)
+		assert.Equal(t, providers[0].Identity, wantIdentity)
+		assert.Equal(t, gotIdentity, wantIdentity)
+		assert.Equal(t, gotPoint, point)
+	})
 
-	h, err := New(context.Background(),
-		WithRuntimeDir(t.TempDir()),
-		WithExtensions(ext),
-	)
-	assert.NilError(t, err)
-	t.Cleanup(func() { assert.NilError(t, h.Shutdown(context.Background())) })
-	providers := h.Providers(point)
-	assert.Equal(t, len(providers), 1)
-	assert.Equal(t, providers[0].Identity, wantIdentity)
+	t.Run("drop omits provider and keeps extension", func(t *testing.T) {
+		initialized := false
+		ext := extensions.New(extensions.Declaration{
+			ID:        id,
+			Providers: []extensions.Provider{{Point: point, Impl: "impl"}},
+			Init: func(context.Context, extensions.Config, extensions.Resolver) error {
+				initialized = true
+				return nil
+			},
+		})
+		h, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(ext),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return Drop()
+			})),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		assert.Assert(t, initialized)
+		assert.Equal(t, len(h.Providers(point)), 0)
+		_, err = h.Provider(point, id)
+		assert.ErrorContains(t, err, `does not provide point "org.example.internal.v1"`)
+	})
+
+	t.Run("reject fails with cause and context", func(t *testing.T) {
+		cause := errors.New("provider denied")
+		_, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(newProviderExtension(id, point)),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return Reject(cause)
+			})),
+		)
+		assert.Assert(t, errors.Is(err, cause))
+		assert.ErrorContains(t, err, `admit provider for extension "org.example.provider.v1"`)
+		assert.ErrorContains(t, err, `origin "builtin"`)
+		assert.ErrorContains(t, err, `point "org.example.internal.v1"`)
+	})
+
+	t.Run("nil policy allows provider", func(t *testing.T) {
+		h, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(newProviderExtension(id, point)),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		assert.Equal(t, len(h.Providers(point)), 1)
+	})
+
+	t.Run("nil function rejects", func(t *testing.T) {
+		_, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(newProviderExtension(id, point)),
+			WithProviderPolicy(PointPolicyFunc(nil)),
+		)
+		assert.ErrorContains(t, err, "point policy rejected the requested use")
+	})
+
+	t.Run("nil rejection cause is replaced", func(t *testing.T) {
+		_, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(newProviderExtension(id, point)),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return Reject(nil)
+			})),
+		)
+		assert.ErrorContains(t, err, "point policy rejected the requested use")
+	})
+
+	t.Run("zero result rejects", func(t *testing.T) {
+		_, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(newProviderExtension(id, point)),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return PointPolicyResult{}
+			})),
+		)
+		assert.ErrorContains(t, err, "point policy returned an invalid or unspecified result")
+	})
 }
 
 // TestProviderAndPublicationPolicyPoints verifies that provider admission and
@@ -377,9 +451,12 @@ func TestProviderAndPublicationPolicyPoints(t *testing.T) {
 		WithRuntimeDir(t.TempDir()),
 		WithExtensions(ext),
 		WithPointServers(server),
-		WithProviderPolicy(PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) bool {
+		WithProviderPolicy(PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) PointPolicyResult {
 			policyPoints = append(policyPoints, point)
-			return point == realPoint
+			if point == realPoint {
+				return Allow()
+			}
+			return Drop()
 		})),
 	)
 	assert.NilError(t, err)
@@ -420,7 +497,7 @@ func TestProcessResourceCleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	t.Run("provider policy denial", func(t *testing.T) {
+	t.Run("provider policy rejection", func(t *testing.T) {
 		probeFile := filepath.Join(t.TempDir(), "probe")
 		var gotIdentity extensions.ExtensionIdentity
 		_, err := New(ctx,
@@ -428,9 +505,9 @@ func TestProcessResourceCleanup(t *testing.T) {
 			WithDirs(dir),
 			WithClientProviders(echopb.ClientPoint),
 			WithExtensionConfig(processProbeConfig(probeFile, false)),
-			WithProviderPolicy(PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+			WithProviderPolicy(PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) PointPolicyResult {
 				gotIdentity = identity
-				return false
+				return Reject(nil)
 			})),
 		)
 		assert.ErrorContains(t, err, `extension "org.example.lifecycle.v1"`)
@@ -616,25 +693,38 @@ func TestApproveProcessPublications(t *testing.T) {
 		},
 	}
 	identity := executableIdentity(launched.ID)
-	allow := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return true })
-	deny := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return false })
+	allow := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult { return Allow() })
+	drop := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult { return Drop() })
 
-	t.Run("nil policy denies", func(t *testing.T) {
+	t.Run("nil policy drops", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
 		assert.NilError(t, approveProcessPublications(identity, launched, nil, published, map[string]extensions.ExtensionID{}, nil))
 		assert.Equal(t, len(published), 0)
 	})
 
-	t.Run("nil function policy denies", func(t *testing.T) {
+	t.Run("nil function policy rejects", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
-		assert.NilError(t, approveProcessPublications(identity, launched, PointPolicyFunc(nil), published, map[string]extensions.ExtensionID{}, nil))
+		err := approveProcessPublications(identity, launched, PointPolicyFunc(nil), published, map[string]extensions.ExtensionID{}, nil)
+		assert.ErrorContains(t, err, "point policy rejected the requested use")
 		assert.Equal(t, len(published), 0)
 	})
 
-	t.Run("denied offer is omitted", func(t *testing.T) {
+	t.Run("dropped offer is omitted", func(t *testing.T) {
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
-		assert.NilError(t, approveProcessPublications(identity, launched, deny, published, map[string]extensions.ExtensionID{}, nil))
+		assert.NilError(t, approveProcessPublications(identity, launched, drop, published, map[string]extensions.ExtensionID{}, nil))
 		assert.Equal(t, len(published), 0)
+	})
+
+	t.Run("rejected offer fails with cause", func(t *testing.T) {
+		cause := errors.New("publication denied")
+		policy := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+			return Reject(cause)
+		})
+		err := approveProcessPublications(identity, launched, policy, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
+		assert.Assert(t, errors.Is(err, cause))
+		assert.ErrorContains(t, err, `publish offered points for extension "org.example.first.v1"`)
+		assert.ErrorContains(t, err, `origin "executable"`)
+		assert.ErrorContains(t, err, `point "org.mobyproject.extension.service.v0"`)
 	})
 
 	t.Run("allowed offers are copied", func(t *testing.T) {
@@ -649,9 +739,12 @@ func TestApproveProcessPublications(t *testing.T) {
 
 	t.Run("provider policy is called once with service metadata", func(t *testing.T) {
 		var policyPoints []extensions.PointID
-		policy := PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) bool {
+		policy := PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) PointPolicyResult {
 			policyPoints = append(policyPoints, point)
-			return point == servicev0.Point.ID()
+			if point == servicev0.Point.ID() {
+				return Allow()
+			}
+			return Drop()
 		})
 		published := make(map[extensions.ExtensionID]map[extensions.PointID][]string)
 		assert.NilError(t, approveProcessPublications(identity, launched, policy, published, map[string]extensions.ExtensionID{}, nil))
@@ -687,11 +780,11 @@ func TestInProcessPublicationValidation(t *testing.T) {
 		},
 	})
 	identity := extensions.ExtensionIdentity{ID: ext.Declaration().ID, Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin}}
-	allow := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return true })
-	deny := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) bool { return false })
+	allow := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult { return Allow() })
+	drop := PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult { return Drop() })
 
-	t.Run("denied offer needs no adapter", func(t *testing.T) {
-		services, err := collectInProcessPublications(identity, ext, deny, nil, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
+	t.Run("dropped offer needs no adapter", func(t *testing.T) {
+		services, err := collectInProcessPublications(identity, ext, drop, nil, make(map[extensions.ExtensionID]map[extensions.PointID][]string), map[string]extensions.ExtensionID{}, nil)
 		assert.NilError(t, err)
 		assert.Equal(t, len(services), 0)
 	})
@@ -734,6 +827,75 @@ func TestInProcessPublicationValidation(t *testing.T) {
 		otherIdentity := extensions.ExtensionIdentity{ID: other.Declaration().ID, Origin: extensions.ExtensionOrigin{Kind: extensions.ExtensionOriginBuiltin}}
 		_, err = collectInProcessPublications(otherIdentity, other, allow, servers, published, owners, nil)
 		assert.ErrorContains(t, err, `extensions "org.example.extension.v1" and "org.example.other.v1" both publish gRPC service "example.API"`)
+	})
+}
+
+func TestInProcessPublicationPolicy(t *testing.T) {
+	pointDefinition := extensions.DefinePoint[any]("org.example.publication.v1")
+	point := pointDefinition.ID()
+	const id = extensions.ExtensionID("org.example.extension.v1")
+	ext := extensions.New(extensions.Declaration{
+		ID: id,
+		Providers: []extensions.Provider{
+			pointDefinition.Provide(struct{}{}),
+			servicev0.Offer(pointDefinition),
+		},
+	})
+	server := serverpoint.Registration{
+		Point: point,
+		Register: func(registrar grpc.ServiceRegistrar, impl any) {
+			registrar.RegisterService(&grpc.ServiceDesc{ServiceName: "example.API", HandlerType: (*any)(nil)}, impl)
+		},
+	}
+
+	t.Run("nil policy keeps provider and drops publication", func(t *testing.T) {
+		h, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(ext),
+			WithPointServers(server),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		assert.Equal(t, len(h.Providers(point)), 1)
+		assert.Equal(t, len(h.PublishedServicesForPoint(point)), 0)
+	})
+
+	t.Run("allow publishes original provider after ordinary drop", func(t *testing.T) {
+		h, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(ext),
+			WithPointServers(server),
+			WithProviderPolicy(PointPolicyFunc(func(_ extensions.ExtensionIdentity, policyPoint extensions.PointID) PointPolicyResult {
+				if policyPoint == servicev0.Point.ID() {
+					return Allow()
+				}
+				return Drop()
+			})),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		assert.Equal(t, len(h.Providers(point)), 0)
+		assert.DeepEqual(t, h.PublishedServicesForPoint(point), map[extensions.ExtensionID][]string{
+			id: {"example.API"},
+		})
+	})
+
+	t.Run("reject fails with cause", func(t *testing.T) {
+		cause := errors.New("publication denied")
+		h, err := New(context.Background(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(ext),
+			WithPointServers(server),
+			WithProviderPolicy(PointPolicyFunc(func(_ extensions.ExtensionIdentity, policyPoint extensions.PointID) PointPolicyResult {
+				if policyPoint == servicev0.Point.ID() {
+					return Reject(cause)
+				}
+				return Allow()
+			})),
+		)
+		assert.Assert(t, h == nil)
+		assert.Assert(t, errors.Is(err, cause))
+		assert.ErrorContains(t, err, `publish offered points for extension "org.example.extension.v1"`)
 	})
 }
 
