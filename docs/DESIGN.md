@@ -57,7 +57,8 @@ These names are distinct:
 
 Publishing a point id means publishing the generated gRPC service in its proto
 package. Socket routing takes the full service name. `servicev0.Point` carries
-the extension's offers, while Host policy makes the final publication decision.
+the extension's offers, while policy on `servicev0.Point.ID()` makes the final
+publication decision.
 
 ## Resolution, ordering, and lifecycle
 
@@ -150,15 +151,15 @@ Providers: []extensions.Provider{
 ```
 
 `servicev0.Offer` carries no transport registration and grants no publication
-authority. The Host applies the policy supplied through
-`WithPublicationPolicy` and denies all offers when the policy is nil.
-Separately, `WithProviderPolicy` admits providers wired for internal Host use; a
-nil provider policy preserves their registration.
+authority. The Host applies `WithProviderPolicy` to `servicev0.Point.ID()` and
+denies all offers when the policy is nil.
+The same policy admits providers wired for internal Host use by ordinary Point
+ID; a nil policy preserves their registration.
 Provider denial fails loading and does not filter the declaration.
-An offered-only process Point without Host client wiring remains governed only
-by publication policy.
-The `servicev0` offer marker in a declaration is exempt from provider admission
-and is governed only by publication policy.
+An offered-only process Point without Host client wiring is governed only by
+the servicev0 policy decision.
+The servicev0 marker is exempt from provider admission and controls publication
+of the extension's offered Points.
 
 An out-of-process extension passes every ordinary provider's generated
 `ServerPoint` to `sdk.Main` or `Server.Register`. The SDK records service names

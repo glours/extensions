@@ -77,8 +77,8 @@ type PointID string
 
 // IsMetadataPoint reports whether point carries framework metadata rather than
 // a callable capability.
-// Host provider admission never consults policy for metadata points; only
-// publication policy governs them.
+// Host provider admission skips metadata points; the servicev0 marker controls
+// publication.
 // Currently the servicev0 offer marker is the only metadata point; its package
 // tests keep this ID in sync with the point definition.
 func IsMetadataPoint(point PointID) bool {

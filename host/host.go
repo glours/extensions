@@ -23,8 +23,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-// PointPolicy decides whether an extension identity may use a Point in the way
-// controlled by the policy-bearing option.
+// PointPolicy decides whether an extension identity may provide a Point.
+// The servicev0 metadata Point controls publication.
 type PointPolicy interface {
 	Allow(identity extensions.ExtensionIdentity, point extensions.PointID) bool
 }
@@ -37,12 +37,6 @@ type PointPolicyFunc func(identity extensions.ExtensionIdentity, point extension
 func (f PointPolicyFunc) Allow(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 	return f != nil && f(identity, point)
 }
-
-// PublicationPolicy is the policy used for external Point publication.
-type PublicationPolicy = PointPolicy
-
-// PublicationPolicyFunc adapts a function to [PublicationPolicy].
-type PublicationPolicyFunc = PointPolicyFunc
 
 // Option configures a [Host].
 type Option interface {
@@ -61,7 +55,6 @@ type options struct {
 	dirs                []string
 	clientProviders     []clientpoint.Registration
 	providerPolicy      PointPolicy
-	publicationPolicy   PointPolicy
 	pointServers        []serverpoint.Registration
 	reservedServices    []string
 	extensionConfig     map[extensions.ExtensionID]extensions.Config
@@ -102,21 +95,12 @@ func WithClientProviders(providers ...clientpoint.Registration) Option {
 	})
 }
 
-// WithProviderPolicy sets the policy deciding which internally registered
-// providers are admitted.
-// A nil policy preserves registration of all declared internal providers.
+// WithProviderPolicy sets the policy deciding which providers are admitted.
+// A decision on servicev0.Point.ID() controls publication.
+// A nil policy admits all internally wired providers but denies publication.
 func WithProviderPolicy(policy PointPolicy) Option {
 	return optionFunc(func(options *options) {
 		options.providerPolicy = policy
-	})
-}
-
-// WithPublicationPolicy sets the policy deciding which offered points become
-// externally reachable.
-// A nil policy denies all publication.
-func WithPublicationPolicy(policy PointPolicy) Option {
-	return optionFunc(func(options *options) {
-		options.publicationPolicy = policy
 	})
 }
 
@@ -247,6 +231,7 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 		}
 		reservedServices[service] = true
 	}
+	policy := opts.providerPolicy
 	b := broker.New()
 	conns := make(map[extensions.ExtensionID]grpc.ClientConnInterface)
 	var loaded []loadedExtension
@@ -281,10 +266,10 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 		if err := validateHostIdentity(identity, decl); err != nil {
 			return nil, err
 		}
-		if err := admitProviders(identity, decl.Providers, opts.providerPolicy); err != nil {
+		if err := admitProviders(identity, decl.Providers, policy); err != nil {
 			return nil, err
 		}
-		services, err := collectInProcessPublications(identity, ext, opts.publicationPolicy, pointServers, publishedServices, publishedOwners, reservedServices)
+		services, err := collectInProcessPublications(identity, ext, policy, pointServers, publishedServices, publishedOwners, reservedServices)
 		if err != nil {
 			return nil, err
 		}
@@ -314,10 +299,10 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 			if err := validateHostIdentity(identity, decl); err != nil {
 				return nil, err
 			}
-			if err := admitProviders(identity, decl.Providers, opts.providerPolicy); err != nil {
+			if err := admitProviders(identity, decl.Providers, policy); err != nil {
 				return nil, err
 			}
-			if err := approveProcessPublications(identity, started, opts.publicationPolicy, publishedServices, publishedOwners, reservedServices); err != nil {
+			if err := approveProcessPublications(identity, started, policy, publishedServices, publishedOwners, reservedServices); err != nil {
 				return nil, err
 			}
 			if err := b.Register(identity, loadedExt.extension); err != nil {
@@ -383,13 +368,13 @@ func admitProviders(identity extensions.ExtensionIdentity, providers []extension
 }
 
 func approveProcessPublications(identity extensions.ExtensionIdentity, started *launcher.Launched, policy PointPolicy, published map[extensions.ExtensionID]map[extensions.PointID][]string, owners map[string]extensions.ExtensionID, reserved map[string]bool) error {
-	if policy == nil {
+	if len(started.OfferedPoints) == 0 || policy == nil {
+		return nil
+	}
+	if !policy.Allow(identity, servicev0.Point.ID()) {
 		return nil
 	}
 	for _, point := range started.OfferedPoints {
-		if !policy.Allow(identity, point) {
-			continue
-		}
 		names := started.ProviderServices[point]
 		if len(names) == 0 {
 			return fmt.Errorf("extension %q offered point %q without a gRPC service", identity.ID, point)
@@ -421,7 +406,7 @@ func collectInProcessPublications(identity extensions.ExtensionIdentity, ext ext
 		providers[provider.Point] = provider.Impl
 	}
 
-	var services []servicegrpc.Service
+	var offered []extensions.PointID
 	seen := make(map[extensions.PointID]bool)
 	for _, provider := range decl.Providers {
 		if provider.Point != servicev0.Point.ID() {
@@ -442,34 +427,40 @@ func collectInProcessPublications(identity extensions.ExtensionIdentity, ext ext
 				return nil, fmt.Errorf("extension %q: point %q is offered more than once", decl.ID, point)
 			}
 			seen[point] = true
-			impl, implemented := providers[point]
+			_, implemented := providers[point]
 			if !implemented {
 				return nil, fmt.Errorf("extension %q: offered point %q is not implemented", decl.ID, point)
 			}
-			if policy == nil || !policy.Allow(identity, point) {
-				continue
-			}
-			registration, ok := servers[point]
-			if !ok {
-				return nil, fmt.Errorf("extension %q: allowed in-process offer for point %q has no server registration", decl.ID, point)
-			}
-			service, err := servicegrpc.Adapt(registration, impl)
-			if err != nil {
-				return nil, fmt.Errorf("extension %q: publish point %q: %w", decl.ID, point, err)
-			}
-			if reserved[service.Name] {
-				return nil, fmt.Errorf("extension %q cannot publish reserved gRPC service %q", decl.ID, service.Name)
-			}
-			if owner, exists := owners[service.Name]; exists {
-				return nil, fmt.Errorf("extensions %q and %q both publish gRPC service %q", owner, decl.ID, service.Name)
-			}
-			owners[service.Name] = decl.ID
-			services = append(services, service)
-			if published[decl.ID] == nil {
-				published[decl.ID] = make(map[extensions.PointID][]string)
-			}
-			published[decl.ID][point] = []string{service.Name}
+			offered = append(offered, point)
 		}
+	}
+	if len(offered) == 0 || policy == nil || !policy.Allow(identity, servicev0.Point.ID()) {
+		return nil, nil
+	}
+
+	var services []servicegrpc.Service
+	for _, point := range offered {
+		impl := providers[point]
+		registration, ok := servers[point]
+		if !ok {
+			return nil, fmt.Errorf("extension %q: allowed in-process offer for point %q has no server registration", decl.ID, point)
+		}
+		service, err := servicegrpc.Adapt(registration, impl)
+		if err != nil {
+			return nil, fmt.Errorf("extension %q: publish point %q: %w", decl.ID, point, err)
+		}
+		if reserved[service.Name] {
+			return nil, fmt.Errorf("extension %q cannot publish reserved gRPC service %q", decl.ID, service.Name)
+		}
+		if owner, exists := owners[service.Name]; exists {
+			return nil, fmt.Errorf("extensions %q and %q both publish gRPC service %q", owner, decl.ID, service.Name)
+		}
+		owners[service.Name] = decl.ID
+		services = append(services, service)
+		if published[decl.ID] == nil {
+			published[decl.ID] = make(map[extensions.PointID][]string)
+		}
+		published[decl.ID][point] = []string{service.Name}
 	}
 	return services, nil
 }

@@ -92,16 +92,21 @@ Providers: []extensions.Provider{
 }
 ```
 
-An offer is not authorization. The Host defaults to deny and applies policy per
-host-attested extension identity and Point:
+An offer is not authorization. The Host defaults to deny and applies policy to
+the host-attested extension identity and `servicev0.Point.ID()`:
 
 ```go
-_, err := host.New(ctx, host.WithPublicationPolicy(host.PublicationPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
+_, err := host.New(ctx, host.WithProviderPolicy(host.PointPolicyFunc(func(identity extensions.ExtensionIdentity, point extensions.PointID) bool {
 	return identity.ID == "org.example.greeter.v1" &&
 		identity.Origin.Kind == extensions.ExtensionOriginExecutable &&
-		point == greeterv0.Point.ID()
+		(point == greeterv0.Point.ID() || point == servicev0.Point.ID())
 })))
 ```
+
+Publication policy receives the host-attested identity. Internal provider
+admission uses the same callback with ordinary Point IDs. A nil policy preserves
+all internally wired providers and denies publication. Offered-only process
+Points consult the policy only with `servicev0.Point.ID()`.
 
 For a separate binary, pass each implemented Point's generated adapter at the
 process composition boundary:
@@ -139,7 +144,7 @@ publication is not part of the extension API.
 | **Provider** | An extension's implementation of one point. It has no separate id and is identified by its extension id; an extension implements a point at most once. |
 | **ClientPoint** | Generated host wiring that turns an extension connection into a provider of an ordinary point. |
 | **ServerPoint** | Generated SDK or callback wiring that serves an ordinary point's gRPC service. |
-| **Publication** | A Host policy allowing an extension-offered ordinary Point to become externally reachable. |
+| **Publication** | A Host policy decision on `servicev0.Point.ID()` allowing extension-offered Points to become externally reachable. |
 | **Consumer / dependent** | The engine or another extension that resolves and calls a point. |
 | **Dependency** | A declared need resolved before initialization. A point dependency needs a provider; an extension dependency names one extension. |
 | **Broker** | The host component that registers extensions, resolves dependencies, initializes them, and shuts them down. |
