@@ -18,7 +18,7 @@ import (
 func TestPdeathsigKillsDirectChildWhenParentExits(t *testing.T) {
 	statusR, statusW, err := os.Pipe()
 	assert.NilError(t, err)
-	defer statusR.Close()
+	defer func() { assert.NilError(t, statusR.Close()) }()
 
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = launcherHelperEnv("pdeathsig-parent")
