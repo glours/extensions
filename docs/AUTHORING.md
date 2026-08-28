@@ -267,7 +267,7 @@ A separate binary passes every ordinary provider's generated `ServerPoint` to
 the SDK, whether the Point is internal, offered, or both:
 
 ```go
-sdk.Main(extension, greeterpb.ServerPoint)
+sdk.Main(extension, sdk.WithServerPoints(greeterpb.ServerPoint))
 ```
 
 External callers use the generated handwritten client over the host connection:
