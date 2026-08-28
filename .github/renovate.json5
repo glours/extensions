@@ -8,11 +8,11 @@
   "minimumReleaseAge": "3 days",
   "customManagers": [
     {
-      "description": "Track Go lint tools used by CI",
+      "description": "Track Go lint tools used by make lint",
       "customType": "regex",
-      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "managerFilePatterns": ["/^Makefile$/"],
       "matchStrings": [
-        "renovate: depName=(?<depName>[^\\s]+)\\s+run: go run [^@\\s]+@(?<currentValue>v?\\d+\\.\\d+\\.\\d+)"
+        "renovate: depName=(?<depName>[^\\s]+)\\s+[A-Z0-9_]+_VERSION\\s*\\?=\\s*(?<currentValue>v?\\d+\\.\\d+\\.\\d+)"
       ],
       "datasourceTemplate": "go"
     }
