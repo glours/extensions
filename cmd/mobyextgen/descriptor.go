@@ -51,6 +51,7 @@ func emitMessages(pt point) ([]byte, error) {
 	// Keep generated code aligned with the module's Go version until
 	// protoc-gen-go emits reflect.TypeFor itself.
 	content = strings.Replace(content, "reflect.TypeOf(x{}).PkgPath()", "reflect.TypeFor[x]().PkgPath()", 1)
+	content = pt.licenseHeader + content
 	return []byte(content), nil
 }
 

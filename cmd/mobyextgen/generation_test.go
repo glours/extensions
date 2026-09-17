@@ -4,11 +4,66 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 )
+
+func TestGeneratedFilesInheritContractNotices(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		header string
+	}{
+		{
+			name: "Moby notices",
+			header: "// SPDX-FileCopyrightText: Copyright The Moby Authors\n" +
+				"// SPDX-License-Identifier: Apache-2.0\n\n",
+		},
+		{
+			name: "multiple copyright holders and another license expression",
+			header: "// SPDX-FileCopyrightText: Copyright Example Authors\n" +
+				"// SPDX-FileCopyrightText: Copyright Other Authors\n" +
+				"// SPDX-License-Identifier: MIT OR Apache-2.0\n\n",
+		},
+		{name: "license only", header: "// SPDX-License-Identifier: Apache-2.0\n\n"},
+		{name: "copyright only", header: "// SPDX-FileCopyrightText: Copyright Example Authors\n\n"},
+		{name: "no notices"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/contract\n"), 0o644))
+			const contract = `package contract
+
+// SPDX-FileCopyrightText: ignore comments after the package clause
+// SPDX-License-Identifier: ignore comments after the package clause
+type Runtime interface{ Do(ctx interface{}, req *Req) (*Resp, error) }
+type Req struct{}
+type Resp struct{}
+`
+			assert.NilError(t, os.WriteFile(filepath.Join(dir, "contract.go"), []byte(tc.header+contract), 0o644))
+			// A different file's notices must not override the interface's notices.
+			const other = `// SPDX-FileCopyrightText: Copyright Unrelated Authors
+// SPDX-License-Identifier: BSD-3-Clause
+
+package contract
+`
+			assert.NilError(t, os.WriteFile(filepath.Join(dir, "other.go"), []byte(other), 0o644))
+			assert.NilError(t, run(dir, "example.contract.v1.Runtime"))
+			for _, name := range []string{"runtime.proto", "protogen/runtime.pb.go", "protogen/wire.gen.go"} {
+				content, err := os.ReadFile(filepath.Join(dir, name))
+				assert.NilError(t, err)
+				header, _, ok := strings.Cut(string(content), "// Code generated")
+				assert.Assert(t, ok, "%s must have a generated code marker", name)
+				assert.Equal(t, header, tc.header, "%s must preserve only the contract notices", name)
+			}
+		})
+	}
+}
 
 func TestSingleMessageField(t *testing.T) {
 	pt, err := parsePoint("testdata/singlemsg")
