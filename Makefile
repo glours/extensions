@@ -34,6 +34,9 @@ lint: lint-license
 		--env GOMODCACHE=/root/.cache/go-mod \
 		--env GOLANGCI_LINT_CACHE=/root/.cache/golangci-lint \
 		--env GOFLAGS=-buildvcs=false \
+		--env GIT_CONFIG_COUNT=1 \
+		--env GIT_CONFIG_KEY_0=safe.directory \
+		--env GIT_CONFIG_VALUE_0=$(LINT_WORKDIR) \
 		--workdir $(LINT_WORKDIR) \
 		$(LINT_IMAGE) \
 		make host-lint
@@ -43,10 +46,14 @@ lint-license:
 	bash hack/lint-license.sh
 
 .PHONY: host-lint
-host-lint:
+host-lint: lint-generate
 	$(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 	$(GO) run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@$(MODERNIZE_VERSION) ./...
 	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+
+.PHONY: lint-generate
+lint-generate:
+	GO="$(GO)" bash hack/lint-generate.sh
 
 .PHONY: validate
 validate:
