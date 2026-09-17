@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright The Moby Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package greeterdep is the out-of-process dependency-test fixture.
 package greeterdep
 

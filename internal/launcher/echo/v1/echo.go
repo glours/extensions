@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright The Moby Authors
+// SPDX-License-Identifier: Apache-2.0
+
 //go:generate go run github.com/moby/extensions/cmd/mobyextgen
 
 // Package echov1 is the minimal extension point used by launcher tests.

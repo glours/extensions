@@ -16,7 +16,7 @@ LINT_IMAGE ?= golang:$(GO_VERSION)
 ci: lint validate
 
 .PHONY: lint
-lint:
+lint: lint-license
 	@if [ -z "$(GO_VERSION)" ] || \
 		[ -z "$(ACTIONLINT_VERSION)" ] || \
 		[ -z "$(MODERNIZE_VERSION)" ] || \
@@ -37,6 +37,10 @@ lint:
 		--workdir $(LINT_WORKDIR) \
 		$(LINT_IMAGE) \
 		make host-lint
+
+.PHONY: lint-license
+lint-license:
+	bash hack/lint-license.sh
 
 .PHONY: host-lint
 host-lint:
