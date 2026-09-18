@@ -605,14 +605,14 @@ func TestProcessResourceCleanup(t *testing.T) {
 		shutdown := false
 		t.Cleanup(func() {
 			if !shutdown {
-				_ = h.Shutdown(t.Context())
+				_ = h.Shutdown(context.WithoutCancel(ctx))
 			}
 		})
 		assert.Equal(t, len(h.loaded), 1,
 			"only the process-backed extension should own a loaded resource")
 		assertProcessRunning(t, probeFile)
 
-		err = h.Shutdown(t.Context())
+		err = h.Shutdown(context.WithoutCancel(ctx))
 		shutdown = true
 		assert.NilError(t, err)
 		assertProcessReleased(t, probeFile)

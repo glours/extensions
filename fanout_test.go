@@ -93,8 +93,8 @@ func TestFoldDiscardsPartialValueOnError(t *testing.T) {
 	out, err := Fold(t.Context(), testPoint, resolverOf(
 		resolvedProvider("a", ExtensionOriginExecutable, callerFunc(func(context.Context) error { return nil })),
 		resolvedProvider("b", ExtensionOriginExecutable, callerFunc(func(context.Context) error { return errors.New("no") })),
-	), Policy{}, "seed", func(_ context.Context, c caller, acc string) (string, error) {
-		if err := c.Call(t.Context()); err != nil {
+	), Policy{}, "seed", func(ctx context.Context, c caller, acc string) (string, error) {
+		if err := c.Call(ctx); err != nil {
 			return acc, err
 		}
 		return acc + "+", nil
