@@ -199,7 +199,7 @@ func TestSingleSelection(t *testing.T) {
 			resolvedProvider("org.mobyproject.stock.v1", ExtensionOriginBuiltin, stock),
 		))
 		assert.NilError(t, err)
-		assert.NilError(t, got.Call(context.Background()), "the default must stand in when nothing is installed")
+		assert.NilError(t, got.Call(t.Context()), "the default must stand in when nothing is installed")
 	})
 
 	t.Run("executable provider masks the builtin", func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestSingleSelection(t *testing.T) {
 			resolvedProvider("org.example.custom.v1", ExtensionOriginExecutable, customC),
 		))
 		assert.NilError(t, err)
-		assert.NilError(t, got.Call(context.Background()))
+		assert.NilError(t, got.Call(t.Context()))
 		assert.Equal(t, called, "custom", "the executable provider must replace the builtin, not conflict with it")
 	})
 

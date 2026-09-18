@@ -77,7 +77,7 @@ func TestLaunchedInitializeUsesCallerContext(t *testing.T) {
 	t.Cleanup(func() { assert.NilError(t, conn.Close()) })
 
 	launched := &Launched{Conn: conn}
-	assert.NilError(t, launched.Initialize(context.Background()))
+	assert.NilError(t, launched.Initialize(t.Context()))
 	assert.Equal(t, <-recorder.hasDeadline, false)
 }
 
@@ -88,7 +88,7 @@ func TestLogOutputChunksLongRecords(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	logger.AddHook(hook)
-	ctx := log.WithLogger(context.Background(), logrus.NewEntry(logger))
+	ctx := log.WithLogger(t.Context(), logrus.NewEntry(logger))
 
 	first := strings.Repeat("a", maxOutputRecordSize-1) + "\r"
 	second := strings.Repeat("b", maxOutputRecordSize)
@@ -107,7 +107,7 @@ func TestLogOutputPreservesLines(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	logger.AddHook(hook)
-	ctx := log.WithLogger(context.Background(), logrus.NewEntry(logger))
+	ctx := log.WithLogger(t.Context(), logrus.NewEntry(logger))
 
 	logOutput(ctx, "test", strings.NewReader("first\r\nsecond\n\nfinal\r"))
 
@@ -119,7 +119,7 @@ func TestWaitReadyRejectsOversizedAcknowledgement(t *testing.T) {
 
 	input := strings.Repeat("x", maxOutputRecordSize+1) + "\n"
 	reader := bufio.NewReaderSize(strings.NewReader(input), maxOutputRecordSize)
-	err := waitReady(context.Background(), io.NopCloser(strings.NewReader("")), reader)
+	err := waitReady(t.Context(), io.NopCloser(strings.NewReader("")), reader)
 	assert.ErrorContains(t, err, "readiness acknowledgement exceeds 16384 bytes")
 }
 
@@ -132,8 +132,7 @@ func exeName(name string) string {
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	// Keep socket paths relative so they fit Windows' AF_UNIX path limit.
-	dir, err := os.MkdirTemp(".", "m")
+	dir, err := os.MkdirTemp(".", "m") //nolint:usetesting // Keep socket paths relative so they fit Windows' AF_UNIX path limit.
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
@@ -153,7 +152,7 @@ func TestBinaries(t *testing.T) {
 		assert.NilError(t, os.WriteFile(upper, []byte("x"), 0o755))
 	}
 
-	bins, err := Binaries(context.Background(), dir)
+	bins, err := Binaries(t.Context(), dir)
 	assert.NilError(t, err)
 	want := []string{exe}
 	if runtime.GOOS == "windows" {
@@ -161,7 +160,7 @@ func TestBinaries(t *testing.T) {
 	}
 	assert.DeepEqual(t, bins, want)
 
-	missing, err := Binaries(context.Background(), filepath.Join(dir, "does-not-exist"))
+	missing, err := Binaries(t.Context(), filepath.Join(dir, "does-not-exist"))
 	assert.NilError(t, err)
 	assert.Check(t, is.Len(missing, 0))
 }
@@ -178,14 +177,14 @@ func TestBinariesRefusesWorldWritable(t *testing.T) {
 	assert.NilError(t, os.WriteFile(bad, []byte("x"), 0o755))
 	assert.NilError(t, os.Chmod(bad, 0o757)) // o+w
 
-	bins, err := Binaries(context.Background(), dir)
+	bins, err := Binaries(t.Context(), dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, bins, []string{good})
 
 	wwDir := t.TempDir()
 	assert.NilError(t, os.WriteFile(filepath.Join(wwDir, "org.example.x.v1"), []byte("x"), 0o755))
 	assert.NilError(t, os.Chmod(wwDir, 0o777))
-	bins, err = Binaries(context.Background(), wwDir)
+	bins, err = Binaries(t.Context(), wwDir)
 	assert.NilError(t, err)
 	assert.Check(t, is.Len(bins, 0))
 }
@@ -205,7 +204,7 @@ func TestBinariesRefusesUntrustedOwner(t *testing.T) {
 	assert.NilError(t, os.WriteFile(bad, []byte("x"), 0o755))
 	assert.NilError(t, os.Chown(bad, 65534, 65534)) // nobody: not root, not us
 
-	bins, err := Binaries(context.Background(), dir)
+	bins, err := Binaries(t.Context(), dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, bins, []string{good})
 }
@@ -220,14 +219,14 @@ func TestLaunchOutOfProcess(t *testing.T) {
 	out, err := build.CombinedOutput()
 	assert.NilError(t, err, "build extension: %s", out)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	runtimeDir := filepath.Join(shortTempDir(t), strings.Repeat("r", 40))
 	assert.NilError(t, os.Mkdir(runtimeDir, 0o755))
 	launched, err := Launcher{RuntimeDir: runtimeDir}.Launch(ctx, bin)
 	assert.NilError(t, err)
-	defer func() { assert.NilError(t, launched.Close(context.Background())) }()
+	defer func() { assert.NilError(t, launched.Close(t.Context())) }()
 
 	assert.Equal(t, launched.ID, extensions.ExtensionID(id))
 	assert.Equal(t, launched.Path, bin)
@@ -255,7 +254,7 @@ func TestStopProcessSignalledExitIsNotAnError(t *testing.T) {
 	assert.NilError(t, err)
 	defer func() { assert.NilError(t, lifetime.Close()) }()
 
-	assert.NilError(t, stopProcess(context.Background(), cmd, wait, 5*time.Second))
+	assert.NilError(t, stopProcess(t.Context(), cmd, wait, 5*time.Second))
 }
 
 func TestStopProcessAfterSelfExit(t *testing.T) {
@@ -269,7 +268,7 @@ func TestStopProcessAfterSelfExit(t *testing.T) {
 	time.Sleep(500 * time.Millisecond) // let it exit and be reaped
 
 	done := make(chan error, 1)
-	go func() { done <- stopProcess(context.Background(), cmd, wait, time.Second) }()
+	go func() { done <- stopProcess(t.Context(), cmd, wait, time.Second) }()
 	select {
 	case err := <-done:
 		assert.NilError(t, err)

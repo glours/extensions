@@ -32,8 +32,7 @@ func extensionBinaryPath(dir, id string) string {
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	// Keep socket paths relative so they fit Windows' AF_UNIX path limit.
-	dir, err := os.MkdirTemp(".", "m")
+	dir, err := os.MkdirTemp(".", "m") //nolint:usetesting // Keep socket paths relative so they fit Windows' AF_UNIX path limit.
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
@@ -57,7 +56,7 @@ func TestOutOfProcessDependency(t *testing.T) {
 		t.Fatalf("build greeterdep extension: %v\n%s", err, out)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	var calls atomic.Int32
@@ -73,7 +72,7 @@ func TestOutOfProcessDependency(t *testing.T) {
 		host.WithDependencyProviders(greeterpb.ServerPoint),
 	)
 	assert.NilError(t, err)
-	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+	defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx))) }()
 
 	assert.Equal(t, calls.Load(), int32(1),
 		"in-process greeter provider was not called by the out-of-process extension")

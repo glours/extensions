@@ -80,7 +80,7 @@ func TestDeclarationOfferProtocolRoundTrip(t *testing.T) {
 	assert.NilError(t, err)
 	t.Cleanup(func() { assert.NilError(t, conn.Close()) })
 
-	response, err := sdkapipb.NewClient(conn).Describe(context.Background(), &sdkapi.DescribeRequest{})
+	response, err := sdkapipb.NewClient(conn).Describe(t.Context(), &sdkapi.DescribeRequest{})
 	assert.NilError(t, err)
 	assert.Assert(t, is.DeepEqual(response.Declaration, want))
 }

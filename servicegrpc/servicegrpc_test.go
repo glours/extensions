@@ -61,12 +61,12 @@ func TestGeneratedGreeterPreservesInterceptorFullMethodAndStatus(t *testing.T) {
 	t.Cleanup(func() { assert.NilError(t, conn.Close()) })
 
 	client := greeterpb.NewClient(conn)
-	resp, err := client.Greet(context.Background(), &greeterv0.HelloRequest{Name: "world"})
+	resp, err := client.Greet(t.Context(), &greeterv0.HelloRequest{Name: "world"})
 	assert.NilError(t, err)
 	assert.Equal(t, resp.Message, "hello world")
 	assert.Equal(t, <-intercepted, "/"+serviceName+"/Greet")
 
-	_, err = client.Greet(context.Background(), &greeterv0.HelloRequest{Name: "blocked"})
+	_, err = client.Greet(t.Context(), &greeterv0.HelloRequest{Name: "blocked"})
 	assert.Equal(t, status.Code(err), codes.PermissionDenied)
 	assert.Equal(t, status.Convert(err).Message(), "blocked")
 	assert.Equal(t, <-intercepted, "/"+serviceName+"/Greet")
