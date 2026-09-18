@@ -123,7 +123,7 @@ func TestLaunchStartupWriteTimeout(t *testing.T) {
 		},
 	}
 	started := time.Now()
-	_, err = launcher.Launch(context.Background(), bin)
+	_, err = launcher.Launch(t.Context(), bin)
 	assert.ErrorContains(t, err, `write startup config for extension "blocked-extension": context deadline exceeded`)
 	assert.Check(t, time.Since(started) < 5*time.Second, "timed-out launch took %s", time.Since(started))
 }
@@ -133,7 +133,7 @@ func TestStopProcessKillsProcessGroupDescendant(t *testing.T) {
 	assert.NilError(t, err)
 	defer func() { assert.NilError(t, statusR.Close()) }()
 
-	cmd := exec.CommandContext(context.Background(), os.Args[0])
+	cmd := exec.CommandContext(t.Context(), os.Args[0])
 	cmd.Env = launcherHelperEnv("process-group-leader")
 	cmd.ExtraFiles = []*os.File{statusW}
 	lifetime, wait, err := startProcess(cmd)
@@ -152,7 +152,7 @@ func TestStopProcessKillsProcessGroupDescendant(t *testing.T) {
 	assert.NilError(t, err, line)
 	defer func() { _ = syscall.Kill(descendantPID, syscall.SIGKILL) }()
 
-	assert.NilError(t, stopProcess(context.Background(), cmd, wait, 5*time.Second))
+	assert.NilError(t, stopProcess(t.Context(), cmd, wait, 5*time.Second))
 	assert.NilError(t, lifetime.Close())
 
 	assert.NilError(t, statusR.SetReadDeadline(time.Now().Add(5*time.Second)))

@@ -129,10 +129,10 @@ func TestNewIsLazyAndResolvesTypedGeneratedClient(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, greeterConn == echoConn, "all configured points must share one private connection")
 
-	reply, err := greeter.Greet(context.Background(), &greeterv0.HelloRequest{Name: "world"})
+	reply, err := greeter.Greet(t.Context(), &greeterv0.HelloRequest{Name: "world"})
 	assert.NilError(t, err)
 	assert.Equal(t, reply.Message, "hello world")
-	response, err := echo.Echo(context.Background(), &echov1.EchoRequest{Message: "round trip"})
+	response, err := echo.Echo(t.Context(), &echov1.EchoRequest{Message: "round trip"})
 	assert.NilError(t, err)
 	assert.Equal(t, response.Message, "round trip")
 	assert.Equal(t, engine.dials.Load(), int64(1), "the shared lazy connection should dial once")
@@ -157,7 +157,7 @@ func TestNewFreezesRegistrations(t *testing.T) {
 	}
 	provider, err := Resolve(client, point)
 	assert.NilError(t, err)
-	reply, err := provider.Greet(context.Background(), &greeterv0.HelloRequest{Name: "world"})
+	reply, err := provider.Greet(t.Context(), &greeterv0.HelloRequest{Name: "world"})
 	assert.NilError(t, err)
 	assert.Equal(t, reply.Message, "first")
 	assert.Equal(t, engine.dials.Load(), int64(0))
@@ -323,7 +323,7 @@ func TestResolveConcurrentProviderAndMethodCalls(t *testing.T) {
 				results <- err
 				return
 			}
-			reply, err := provider.Greet(context.Background(), &greeterv0.HelloRequest{Name: "concurrent"})
+			reply, err := provider.Greet(t.Context(), &greeterv0.HelloRequest{Name: "concurrent"})
 			if err != nil {
 				results <- err
 				return
@@ -352,7 +352,7 @@ func TestCloseIsIdempotentAndClosesPrivateConnection(t *testing.T) {
 	assert.NilError(t, err)
 	provider, err := Resolve(client, greeterv0.Point)
 	assert.NilError(t, err)
-	_, err = provider.Greet(context.Background(), &greeterv0.HelloRequest{Name: "close"})
+	_, err = provider.Greet(t.Context(), &greeterv0.HelloRequest{Name: "close"})
 	assert.NilError(t, err)
 	conn := <-engine.conns
 

@@ -37,8 +37,8 @@ func TestProcessShutdownCloseIsIdempotentAndRetainsError(t *testing.T) {
 		lifetime: lifetime,
 	}
 
-	firstErr := shutdown.Close(context.Background())
-	canceled, cancel := context.WithCancel(context.Background())
+	firstErr := shutdown.Close(t.Context())
+	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	secondErr := shutdown.Close(canceled)
 

@@ -29,7 +29,7 @@ func registerExecutable(b *Broker, ext extensions.Extension) error {
 }
 
 func TestInitOrdersDependencies(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b := New()
 	var order []extensions.ExtensionID
 
@@ -94,9 +94,9 @@ func TestShutdownOrdersDependenciesInReverse(t *testing.T) {
 			return nil
 		},
 	})))
-	assert.NilError(t, b.Init(context.Background(), nil))
+	assert.NilError(t, b.Init(t.Context(), nil))
 
-	err := b.Shutdown(context.Background())
+	err := b.Shutdown(t.Context())
 	assert.NilError(t, err)
 	assert.DeepEqual(t, order, []extensions.ExtensionID{"org.test.dependent.v1", "org.test.dependency.v1"})
 }
@@ -112,7 +112,7 @@ func TestShutdownSkipsUninitialized(t *testing.T) {
 		},
 	})))
 
-	assert.NilError(t, b.Shutdown(context.Background()))
+	assert.NilError(t, b.Shutdown(t.Context()))
 	assert.Check(t, len(shutdown) == 0, "Shutdown ran on an uninitialized extension: %v", shutdown)
 }
 
@@ -143,10 +143,10 @@ func TestShutdownUnwindsPartialInit(t *testing.T) {
 		Shutdown: shutdownRecorder("org.test.last.v1"),
 	})))
 
-	err := b.Init(context.Background(), nil)
+	err := b.Init(t.Context(), nil)
 	assert.ErrorContains(t, err, "init failed")
 
-	assert.NilError(t, b.Shutdown(context.Background()))
+	assert.NilError(t, b.Shutdown(t.Context()))
 	assert.DeepEqual(t, order, []extensions.ExtensionID{"org.test.first.v1"})
 }
 
@@ -182,7 +182,7 @@ func TestConcurrentAccess(t *testing.T) {
 		ID:        "org.test.a.v1",
 		Providers: []extensions.Provider{{Point: "a.point.v1", Impl: pingProvider{}}},
 	})))
-	assert.NilError(t, b.Init(context.Background(), nil))
+	assert.NilError(t, b.Init(t.Context(), nil))
 
 	var wg sync.WaitGroup
 	for range 20 {
@@ -296,7 +296,7 @@ func TestInitFailsForMissingRequiredDependency(t *testing.T) {
 	b := New()
 	assert.NilError(t, registerExecutable(b, extensions.New(extensions.Declaration{ID: "org.test.dependent.v1", Dependencies: []extensions.Dependency{{Point: "missing.point"}}})))
 
-	err := b.Init(context.Background(), nil)
+	err := b.Init(t.Context(), nil)
 	assert.ErrorContains(t, err, `requires missing point "missing.point"`)
 }
 
@@ -313,7 +313,7 @@ func TestInitAllowsMissingOptionalDependency(t *testing.T) {
 	}))
 	assert.NilError(t, err)
 
-	assert.NilError(t, b.Init(context.Background(), nil))
+	assert.NilError(t, b.Init(t.Context(), nil))
 	assert.Check(t, initialized)
 }
 
@@ -326,7 +326,7 @@ func TestInitFailsForDependencyCycle(t *testing.T) {
 		assert.NilError(t, registerExecutable(b, extensions.New(ext)))
 	}
 
-	err := b.Init(context.Background(), nil)
+	err := b.Init(t.Context(), nil)
 	assert.ErrorContains(t, err, "extension dependency cycle")
 }
 
@@ -341,7 +341,7 @@ func TestInitWrapsExtensionError(t *testing.T) {
 	}))
 	assert.NilError(t, err)
 
-	err = b.Init(context.Background(), nil)
+	err = b.Init(t.Context(), nil)
 	assert.ErrorIs(t, err, initErr)
 }
 

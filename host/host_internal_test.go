@@ -31,8 +31,7 @@ var _ PointPolicy = PointPolicyFunc(nil)
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	// Keep socket paths relative so they fit Windows' AF_UNIX path limit.
-	dir, err := os.MkdirTemp(".", "m")
+	dir, err := os.MkdirTemp(".", "m") //nolint:usetesting // Keep socket paths relative so they fit Windows' AF_UNIX path limit.
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
@@ -149,7 +148,7 @@ func TestExtensionFromHostedForwardsBrokerConfig(t *testing.T) {
 
 	b := broker.New()
 	assert.NilError(t, registerExecutableForTest(b, ext))
-	assert.NilError(t, b.Init(context.Background(), map[extensions.ExtensionID]extensions.Config{id: want}))
+	assert.NilError(t, b.Init(t.Context(), map[extensions.ExtensionID]extensions.Config{id: want}))
 	assert.DeepEqual(t, got, want)
 }
 
@@ -167,8 +166,8 @@ func TestExtensionFromHostedRunsSemanticShutdown(t *testing.T) {
 
 	b := broker.New()
 	assert.NilError(t, registerExecutableForTest(b, ext))
-	assert.NilError(t, b.Init(context.Background(), nil))
-	assert.NilError(t, b.Shutdown(context.Background()))
+	assert.NilError(t, b.Init(t.Context(), nil))
+	assert.NilError(t, b.Shutdown(t.Context()))
 	assert.Assert(t, shutdown, "the broker did not run hosted semantic shutdown")
 }
 
@@ -301,7 +300,7 @@ func TestSinglePointRejectsTwoProviders(t *testing.T) {
 		Single:   true,
 	}
 
-	_, err := New(context.Background(),
+	_, err := New(t.Context(),
 		WithRuntimeDir(t.TempDir()),
 		WithExtensions(ext("org.example.one.v1"), ext("org.example.two.v1")),
 		WithClientProviders(singleReg),
@@ -310,13 +309,13 @@ func TestSinglePointRejectsTwoProviders(t *testing.T) {
 	assert.ErrorContains(t, err, "org.example.one.v1")
 	assert.ErrorContains(t, err, "org.example.two.v1")
 
-	h, err := New(context.Background(),
+	h, err := New(t.Context(),
 		WithRuntimeDir(t.TempDir()),
 		WithExtensions(ext("org.example.one.v1")),
 		WithClientProviders(singleReg),
 	)
 	assert.NilError(t, err)
-	assert.NilError(t, h.Shutdown(context.Background()))
+	assert.NilError(t, h.Shutdown(t.Context()))
 }
 
 func TestProviderAdmissionPolicy(t *testing.T) {
@@ -327,7 +326,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 	t.Run("allow keeps provider", func(t *testing.T) {
 		var gotIdentity extensions.ExtensionIdentity
 		var gotPoint extensions.PointID
-		h, err := New(context.Background(),
+		h, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(newProviderExtension(id, point)),
 			WithProviderPolicy(PointPolicyFunc(func(identity extensions.ExtensionIdentity, policyPoint extensions.PointID) PointPolicyResult {
@@ -337,7 +336,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 			})),
 		)
 		assert.NilError(t, err)
-		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 		providers := h.Providers(point)
 		assert.Equal(t, len(providers), 1)
 		assert.Equal(t, providers[0].Identity, wantIdentity)
@@ -355,7 +354,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 				return nil
 			},
 		})
-		h, err := New(context.Background(),
+		h, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(ext),
 			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
@@ -363,7 +362,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 			})),
 		)
 		assert.NilError(t, err)
-		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 		assert.Assert(t, initialized)
 		assert.Equal(t, len(h.Providers(point)), 0)
 		_, err = h.Provider(point, id)
@@ -372,7 +371,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 
 	t.Run("reject fails with cause and context", func(t *testing.T) {
 		cause := errors.New("provider denied")
-		_, err := New(context.Background(),
+		_, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(newProviderExtension(id, point)),
 			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
@@ -386,17 +385,17 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 	})
 
 	t.Run("nil policy allows provider", func(t *testing.T) {
-		h, err := New(context.Background(),
+		h, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(newProviderExtension(id, point)),
 		)
 		assert.NilError(t, err)
-		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 		assert.Equal(t, len(h.Providers(point)), 1)
 	})
 
 	t.Run("nil function rejects", func(t *testing.T) {
-		_, err := New(context.Background(),
+		_, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(newProviderExtension(id, point)),
 			WithProviderPolicy(PointPolicyFunc(nil)),
@@ -405,7 +404,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 	})
 
 	t.Run("nil rejection cause is replaced", func(t *testing.T) {
-		_, err := New(context.Background(),
+		_, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(newProviderExtension(id, point)),
 			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
@@ -416,7 +415,7 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 	})
 
 	t.Run("zero result rejects", func(t *testing.T) {
-		_, err := New(context.Background(),
+		_, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(newProviderExtension(id, point)),
 			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
@@ -450,7 +449,7 @@ func TestProviderAndPublicationPolicyPoints(t *testing.T) {
 		},
 	}
 	var policyPoints []extensions.PointID
-	h, err := New(context.Background(),
+	h, err := New(t.Context(),
 		WithRuntimeDir(t.TempDir()),
 		WithExtensions(ext),
 		WithPointServers(server),
@@ -463,7 +462,7 @@ func TestProviderAndPublicationPolicyPoints(t *testing.T) {
 		})),
 	)
 	assert.NilError(t, err)
-	t.Cleanup(func() { assert.NilError(t, h.Shutdown(context.Background())) })
+	t.Cleanup(func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) })
 	assert.DeepEqual(t, policyPoints, []extensions.PointID{realPoint, servicev0.Point.ID()})
 	provider, err := h.Provider(realPoint, id)
 	assert.NilError(t, err)
@@ -497,7 +496,7 @@ func TestProcessResourceCleanup(t *testing.T) {
 		t.Skip("builds and launches a helper binary")
 	}
 	dir, bin := buildLifecycleExtension(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	t.Run("provider policy rejection", func(t *testing.T) {
@@ -606,14 +605,14 @@ func TestProcessResourceCleanup(t *testing.T) {
 		shutdown := false
 		t.Cleanup(func() {
 			if !shutdown {
-				_ = h.Shutdown(context.Background())
+				_ = h.Shutdown(context.WithoutCancel(ctx))
 			}
 		})
 		assert.Equal(t, len(h.loaded), 1,
 			"only the process-backed extension should own a loaded resource")
 		assertProcessRunning(t, probeFile)
 
-		err = h.Shutdown(context.Background())
+		err = h.Shutdown(context.WithoutCancel(ctx))
 		shutdown = true
 		assert.NilError(t, err)
 		assertProcessReleased(t, probeFile)
@@ -635,7 +634,7 @@ func TestCloseLoadedErrClosesInReverseOrderAndJoinsErrors(t *testing.T) {
 		}},
 	}
 
-	err := closeLoadedErr(context.Background(), loaded)
+	err := closeLoadedErr(t.Context(), loaded)
 	assert.DeepEqual(t, closed, []string{"second", "first"})
 	assert.Assert(t, errors.Is(err, firstErr))
 	assert.Assert(t, errors.Is(err, secondErr))
@@ -644,7 +643,7 @@ func TestCloseLoadedErrClosesInReverseOrderAndJoinsErrors(t *testing.T) {
 func TestCloseLoadedSuppressesConstructionCleanupErrors(t *testing.T) {
 	closeErr := errors.New("close failure")
 	var closed []string
-	closeLoaded(context.Background(), []loadedExtension{
+	closeLoaded(t.Context(), []loadedExtension{
 		{close: func(context.Context) error {
 			closed = append(closed, "first")
 			return closeErr
@@ -669,7 +668,7 @@ func TestHostShutdownJoinsSemanticAndResourceErrors(t *testing.T) {
 			return semanticErr
 		},
 	})))
-	assert.NilError(t, b.Init(context.Background(), nil))
+	assert.NilError(t, b.Init(t.Context(), nil))
 	h := &Host{
 		broker: b,
 		loaded: []loadedExtension{{close: func(context.Context) error {
@@ -678,7 +677,7 @@ func TestHostShutdownJoinsSemanticAndResourceErrors(t *testing.T) {
 		}}},
 	}
 
-	err := h.Shutdown(context.Background())
+	err := h.Shutdown(t.Context())
 	assert.DeepEqual(t, order, []string{"semantic", "resource"})
 	assert.Assert(t, errors.Is(err, semanticErr))
 	assert.Assert(t, errors.Is(err, resourceErr))
@@ -852,19 +851,19 @@ func TestInProcessPublicationPolicy(t *testing.T) {
 	}
 
 	t.Run("nil policy keeps provider and drops publication", func(t *testing.T) {
-		h, err := New(context.Background(),
+		h, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(ext),
 			WithPointServers(server),
 		)
 		assert.NilError(t, err)
-		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 		assert.Equal(t, len(h.Providers(point)), 1)
 		assert.Equal(t, len(h.PublishedServicesForPoint(point)), 0)
 	})
 
 	t.Run("allow publishes original provider after ordinary drop", func(t *testing.T) {
-		h, err := New(context.Background(),
+		h, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(ext),
 			WithPointServers(server),
@@ -876,7 +875,7 @@ func TestInProcessPublicationPolicy(t *testing.T) {
 			})),
 		)
 		assert.NilError(t, err)
-		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 		assert.Equal(t, len(h.Providers(point)), 0)
 		assert.DeepEqual(t, h.PublishedServicesForPoint(point), map[extensions.ExtensionID][]string{
 			id: {"example.API"},
@@ -885,7 +884,7 @@ func TestInProcessPublicationPolicy(t *testing.T) {
 
 	t.Run("reject fails with cause", func(t *testing.T) {
 		cause := errors.New("publication denied")
-		h, err := New(context.Background(),
+		h, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(ext),
 			WithPointServers(server),

@@ -32,7 +32,7 @@ func TestEachBoundsEveryProviderIndependently(t *testing.T) {
 		return nil
 	})
 
-	err := Each(context.Background(), testPoint, resolverOf(
+	err := Each(t.Context(), testPoint, resolverOf(
 		resolvedProvider("slow", ExtensionOriginExecutable, slow),
 		resolvedProvider("second", ExtensionOriginExecutable, record),
 	), Policy{Timeout: timeout}, func(ctx context.Context, c caller) error {
@@ -50,7 +50,7 @@ func TestEachAbortsOnErrorAndAttributes(t *testing.T) {
 	count := callerFunc(func(context.Context) error { called++; return nil })
 	veto := callerFunc(func(context.Context) error { called++; return errors.New("not allowed") })
 
-	err := Each(context.Background(), testPoint, resolverOf(
+	err := Each(t.Context(), testPoint, resolverOf(
 		resolvedProvider("org.example.veto.v1", ExtensionOriginExecutable, veto),
 		resolvedProvider("org.example.after.v1", ExtensionOriginExecutable, count),
 	), Policy{Action: "vetoed the start"}, func(ctx context.Context, c caller) error {
@@ -66,7 +66,7 @@ func TestEachFailOpenSkipsAndContinues(t *testing.T) {
 	count := callerFunc(func(context.Context) error { called++; return nil })
 	boom := callerFunc(func(context.Context) error { called++; return errors.New("boom") })
 
-	err := Each(context.Background(), testPoint, resolverOf(
+	err := Each(t.Context(), testPoint, resolverOf(
 		resolvedProvider("org.example.broken.v1", ExtensionOriginExecutable, boom),
 		resolvedProvider("org.example.ok.v1", ExtensionOriginExecutable, count),
 	), Policy{FailOpen: true}, func(ctx context.Context, c caller) error {
@@ -79,7 +79,7 @@ func TestEachFailOpenSkipsAndContinues(t *testing.T) {
 
 func TestFoldThreadsValueInOrder(t *testing.T) {
 	noop := callerFunc(func(context.Context) error { return nil })
-	out, err := Fold(context.Background(), testPoint, resolverOf(
+	out, err := Fold(t.Context(), testPoint, resolverOf(
 		resolvedProvider("a", ExtensionOriginExecutable, noop),
 		resolvedProvider("b", ExtensionOriginExecutable, noop),
 	), Policy{}, "seed", func(_ context.Context, _ caller, acc string) (string, error) {
@@ -90,11 +90,11 @@ func TestFoldThreadsValueInOrder(t *testing.T) {
 }
 
 func TestFoldDiscardsPartialValueOnError(t *testing.T) {
-	out, err := Fold(context.Background(), testPoint, resolverOf(
+	out, err := Fold(t.Context(), testPoint, resolverOf(
 		resolvedProvider("a", ExtensionOriginExecutable, callerFunc(func(context.Context) error { return nil })),
 		resolvedProvider("b", ExtensionOriginExecutable, callerFunc(func(context.Context) error { return errors.New("no") })),
-	), Policy{}, "seed", func(_ context.Context, c caller, acc string) (string, error) {
-		if err := c.Call(context.Background()); err != nil {
+	), Policy{}, "seed", func(ctx context.Context, c caller, acc string) (string, error) {
+		if err := c.Call(ctx); err != nil {
 			return acc, err
 		}
 		return acc + "+", nil

@@ -48,7 +48,7 @@ var streamerDesc = grpc.ServiceDesc{
 }
 
 func TestProxyServerStreaming(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	backendSock := filepath.Join(shortTempDir(t), "backend.sock")
@@ -99,7 +99,7 @@ var unaryDesc = grpc.ServiceDesc{
 }
 
 func TestProxyUnary(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	clientConn := startProxy(t, "test.Unary", func(s *grpc.Server) { s.RegisterService(&unaryDesc, nil) })
@@ -126,7 +126,7 @@ var statusDesc = grpc.ServiceDesc{
 }
 
 func TestProxyForwardsBackendStatus(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	clientConn := startProxy(t, "test.Status", func(s *grpc.Server) { s.RegisterService(&statusDesc, nil) })
@@ -157,7 +157,7 @@ var metaDesc = grpc.ServiceDesc{
 }
 
 func TestProxyForwardsMetadata(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	clientConn := startProxy(t, "test.Meta", func(s *grpc.Server) { s.RegisterService(&metaDesc, nil) })
@@ -196,7 +196,7 @@ var collectorDesc = grpc.ServiceDesc{
 }
 
 func TestProxyClientStreaming(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	clientConn := startProxy(t, "test.Collector", func(s *grpc.Server) { s.RegisterService(&collectorDesc, nil) })
@@ -249,8 +249,7 @@ func serve(t *testing.T, sock string, register func(*grpc.Server)) grpc.ClientCo
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	// Keep socket paths relative so they fit Windows' AF_UNIX path limit.
-	dir, err := os.MkdirTemp(".", "m")
+	dir, err := os.MkdirTemp(".", "m") //nolint:usetesting // Keep socket paths relative so they fit Windows' AF_UNIX path limit.
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir

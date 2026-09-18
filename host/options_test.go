@@ -15,16 +15,16 @@ import (
 func TestNewWithNoOptions(t *testing.T) {
 	t.Parallel()
 
-	h, err := host.New(context.Background())
+	h, err := host.New(t.Context())
 	assert.NilError(t, err)
-	assert.NilError(t, h.Shutdown(context.Background()))
+	assert.NilError(t, h.Shutdown(t.Context()))
 }
 
 func TestNewRejectsNilOption(t *testing.T) {
 	t.Parallel()
 
 	var option host.Option
-	h, err := host.New(context.Background(), option)
+	h, err := host.New(t.Context(), option)
 	assert.Assert(t, h == nil)
 	if err == nil {
 		t.Fatal("host.New returned nil error for a nil option")
@@ -49,9 +49,9 @@ func TestRepeatedExtensionOptionsComposeAndCopyInput(t *testing.T) {
 	firstOption := host.WithExtensions(exts...)
 	exts[0] = second
 
-	h, err := host.New(context.Background(), firstOption, host.WithExtensions(second))
+	h, err := host.New(t.Context(), firstOption, host.WithExtensions(second))
 	assert.NilError(t, err)
-	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+	defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 
 	got, err := h.Provider(point.ID(), "org.example.first.v1")
 	assert.NilError(t, err)

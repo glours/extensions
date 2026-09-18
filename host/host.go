@@ -315,8 +315,9 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 	// also explicitly close loaded resources.
 	defer func() {
 		if retErr != nil {
-			_ = b.Shutdown(context.Background())
-			closeLoaded(context.Background(), loaded)
+			ctx := context.WithoutCancel(ctx)
+			_ = b.Shutdown(ctx)
+			closeLoaded(ctx, loaded)
 			if callback != nil {
 				callback.Stop()
 			}
@@ -676,7 +677,7 @@ func loadProcess(ctx context.Context, l launcher.Launcher, bin string, providers
 	owned := true
 	defer func() {
 		if owned {
-			_ = launched.Close(context.Background())
+			_ = launched.Close(context.WithoutCancel(ctx))
 		}
 	}()
 

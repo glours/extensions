@@ -41,7 +41,7 @@ func TestPointSocketExposure(t *testing.T) {
 		t.Fatalf("build greeter extension: %v\n%s", err, out)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	var policyIdentity extensions.ExtensionIdentity
@@ -59,7 +59,7 @@ func TestPointSocketExposure(t *testing.T) {
 		})),
 	)
 	assert.NilError(t, err)
-	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+	defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx))) }()
 	assert.DeepEqual(t, policyIdentity, extensions.ExtensionIdentity{
 		ID: greeter.ID,
 		Origin: extensions.ExtensionOrigin{
@@ -114,7 +114,7 @@ func TestProcessOfferIsDroppedByDefault(t *testing.T) {
 		t.Fatalf("build exthook extension: %v\n%s", err, out)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	h, err := host.New(ctx,
@@ -123,7 +123,7 @@ func TestProcessOfferIsDroppedByDefault(t *testing.T) {
 		host.WithClientProviders(echopb.ClientPoint),
 	)
 	assert.NilError(t, err)
-	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+	defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx))) }()
 
 	assert.Check(t, h.PublishedServicesForPoint(echov1.Point.ID())[id] == nil)
 
@@ -148,7 +148,7 @@ func TestProcessOfferPolicy(t *testing.T) {
 		t.Fatalf("build exthook extension: %v\n%s", err, out)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	t.Run("drop", func(t *testing.T) {
@@ -162,7 +162,7 @@ func TestProcessOfferPolicy(t *testing.T) {
 			})),
 		)
 		assert.NilError(t, err)
-		defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx))) }()
 
 		assert.Equal(t, policyCalls, 1)
 		assert.Check(t, h.PublishedServicesForPoint(echov1.Point.ID())[id] == nil)
@@ -186,7 +186,7 @@ func TestProcessOfferPolicy(t *testing.T) {
 // TestInProcessPointExposure verifies a published Point can be collected and
 // registered directly on a gRPC server without a process boundary.
 func TestInProcessPointExposure(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	var policyIdentity extensions.ExtensionIdentity
 	var policyPoints []extensions.PointID
 	h, err := host.New(ctx,
@@ -203,7 +203,7 @@ func TestInProcessPointExposure(t *testing.T) {
 		})),
 	)
 	assert.NilError(t, err)
-	defer func() { assert.NilError(t, h.Shutdown(context.Background())) }()
+	defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx))) }()
 	assert.DeepEqual(t, policyPoints, []extensions.PointID{greeterv0.Point.ID(), servicev0.Point.ID()})
 	assert.Equal(t, policyIdentity, extensions.ExtensionIdentity{
 		ID:     greeter.ID,

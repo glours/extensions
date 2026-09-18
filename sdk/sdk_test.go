@@ -27,8 +27,7 @@ import (
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	// Keep socket paths relative so they fit Windows' AF_UNIX path limit.
-	dir, err := os.MkdirTemp(".", "m")
+	dir, err := os.MkdirTemp(".", "m") //nolint:usetesting // Keep socket paths relative so they fit Windows' AF_UNIX path limit.
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
@@ -194,12 +193,12 @@ func TestRegisterRejectsUnknownPoint(t *testing.T) {
 
 func TestListenRejectsUnsupportedProtocol(t *testing.T) {
 	srv := NewServer()
-	err := srv.ListenWithIO(context.Background(), strings.NewReader(`{"endpoint":"/tmp/x.sock","protocolVersion":999}`), io.Discard)
+	err := srv.ListenWithIO(t.Context(), strings.NewReader(`{"endpoint":"/tmp/x.sock","protocolVersion":999}`), io.Discard)
 	assert.ErrorContains(t, err, "unsupported extension protocol version")
 }
 
 func TestListenDeliversConfig(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var got extensions.Config
 	ext := extensions.New(extensions.Declaration{
