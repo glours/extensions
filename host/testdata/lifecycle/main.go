@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright The Moby Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command lifecycle is an out-of-process extension fixture used by host
 // resource-ownership tests.
 package main

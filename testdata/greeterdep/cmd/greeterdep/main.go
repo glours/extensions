@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright The Moby Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command greeterdep serves the greeterdep fixture as an out-of-process
 // extension that depends on the greeter point and calls it at init.
 package main

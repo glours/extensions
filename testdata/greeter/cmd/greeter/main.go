@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright The Moby Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command greeter serves the greeter fixture as an out-of-process extension
 // that opts into socket exposure, for the integration test.
 package main

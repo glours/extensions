@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright The Moby Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package host runs extensions and resolves their point providers for a host
 // process such as the Moby daemon.
 package host
