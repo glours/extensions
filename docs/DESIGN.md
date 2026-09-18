@@ -1,7 +1,7 @@
 # Extensions — Design
 
 This document is the authoritative description of current behavior and constraints.
-See the [principles](./README.md#principles), [glossary](./README.md#glossary), and procedural [authoring guide](./AUTHORING.md).
+See the [overview](../README.md#how-it-works) and procedural [authoring guide](./AUTHORING.md).
 Runtime reload, out-of-process health handling, and scoped dependency resolvers are not current behavior.
 The framework and runtime protocol are experimental and currently make no
 backward-compatibility promise.

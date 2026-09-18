@@ -1,7 +1,7 @@
 # Authoring extension points and extensions
 
 This is the procedural guide.
-Read [DESIGN.md](./DESIGN.md) for current rules and the [glossary](./README.md#glossary) for terms.
+Read [DESIGN.md](./DESIGN.md) for current rules and the [overview](../README.md#how-it-works) for the main concepts.
 No engine hook points are available as implementation references yet, so the snippets below are illustrative.
 
 ## Point authoring
