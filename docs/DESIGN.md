@@ -3,8 +3,10 @@
 This document is the authoritative description of current behavior and constraints.
 See the [overview](../README.md#how-it-works) and procedural [authoring guide](./AUTHORING.md).
 Runtime reload, out-of-process health handling, and scoped dependency resolvers are not current behavior.
-The framework and runtime protocol are experimental and currently make no
-backward-compatibility promise.
+The Go API and runtime protocol are experimental and currently make no backward-compatibility promise.
+The framework is a standalone Go module embedded through `host.New`.
+References to a daemon below mean the embedding application, which supplies configuration, discovery directories, and any public transport endpoint.
+Docker configuration files, CLI flags, and engine integration are outside this module.
 
 ## Contract and startup
 
@@ -112,8 +114,7 @@ Errors are attributed to the extension that produced them.
 There is no watchdog, process restart, reconnect, or adoption of extension
 processes from an earlier host.
 A daemon restart constructs a new Host and a new fixed extension set.
-Moby live restore does not retain extension processes, callback sockets, or
-in-memory extension state.
+The framework provides no integration with Moby live restore to retain extension processes, callback sockets, or in-memory extension state.
 Until a separate extension lifecycle exists, an extension must not own runtime
 state required by containers that are expected to survive their host daemon.
 The generic Host makes no universal guarantee that an abrupt host crash kills
@@ -194,8 +195,9 @@ service inventory. A name cannot collide with another extension or a service
 already served by the daemon; collision fails startup rather than shadowing the
 existing service.
 
-These services use the raw gRPC endpoint beside the daemon's own gRPC services.
-Authorization plugins gate the REST API, not this endpoint; an exposed service must enforce any access control it needs.
+The embedding application chooses the gRPC endpoint used for publication; the framework does not create a Docker API endpoint.
+An exposed service must enforce any access control it needs.
+In a Moby integration, REST authorization plugins must not be assumed to protect a separate gRPC endpoint.
 
 ## Separate-process protocol
 
@@ -203,7 +205,7 @@ The binary name is its extension id (`<id>.exe` on Windows), and the daemon laun
 Startup proceeds as follows:
 
 1. The daemon writes JSON to stdin with `endpoint`, `protocolVersion`, `config`, and, when dependencies are offered, `callbackEndpoint`.
-   The current protocol version is `1`; `config` is the parsed `daemon.json` entry for the id.
+   The current protocol version is `1`; `config` is the entry supplied through `host.WithExtensionConfig` for the id.
 2. The SDK listens on the supplied Unix socket, then writes exactly `ready\n` to stdout.
    Stdout is reserved for this line: any earlier output corrupts the handshake and fails launch.
    The daemon also drains later stdout so it cannot block the process.
@@ -250,8 +252,8 @@ executable, often as root; each accepted binary remains trusted host code.
 Its host-attested identity is attribution for lookup and policy, not a sandbox,
 permission, or security boundary.
 
-- `--extension-dir`, or the default `/usr/libexec/docker/moby-extensions`, is trusted.
-  Treat it as a root-owned program directory: only package managers or operators should install files there, and unprivileged users must not be able to write to it.
+- Directories supplied through `host.WithDirs` are trusted; the framework has no default discovery directory.
+  Treat each as a root-owned program directory: only package managers or operators should install files there, and unprivileged users must not be able to write to it.
 - A world-writable directory or binary is skipped with a warning.
   A binary or directory owned by anyone other than root or the daemon user is also skipped because its owner could rewrite daemon-executed code.
   Only executable files with valid extension-id names are launched; stray tools and build leftovers are not executed.
@@ -262,8 +264,8 @@ permission, or security boundary.
 - Symlink targets are checked as ordinary files.
   Where ownership cannot be determined from file metadata, notably on Windows, the owner check is not enforced; ACL and group policy remain the operator's responsibility.
 - One accepted extension that cannot launch, describe, initialize, or coexist with the set fails daemon startup.
-  Because the default directory is scanned automatically, a broken or incompatible binary there blocks startup until removed.
-- In rootless mode, the daemon and libexec directory belong to the user, so "trusted" means trusted by that user; the world-writable check still applies.
+  Because every configured directory is scanned at Host construction, a broken or incompatible binary there blocks startup until removed or its directory is no longer configured.
+- When running as an unprivileged user, "trusted" means trusted by that user; the world-writable check still applies.
   Packaging should install one non-world-writable binary per extension, named after its id.
 
 There is no sandbox or separate permission model after acceptance.
@@ -282,6 +284,6 @@ WASM and OPA-style hosts suit sandboxed, reloadable pure computation, not mounts
 
 As with admission webhooks, each point must explicitly choose fail-open or fail-closed behavior.
 Security and veto points generally fail closed; transport or diagnostic points may choose otherwise.
-The framework is built in-tree, with external-binary discovery and packaging on the same extension-facing Go API.
+The framework is a standalone Go module, with external-binary discovery and in-process registration on the same extension-facing Go API.
 Transport is a host assembly choice: direct Go and gRPC use the same point interface.
-Keeping the startup protocol small and the framework in-tree leaves room for extraction or convergence after production experience instead of freezing an unproven public contract.
+Keeping the startup protocol small and the API experimental leaves room for changes after integration experience instead of freezing an unproven public contract.

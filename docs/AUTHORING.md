@@ -2,13 +2,15 @@
 
 This is the procedural guide.
 Read [DESIGN.md](./DESIGN.md) for current rules and the [overview](../README.md#how-it-works) for the main concepts.
-No engine hook points are available as implementation references yet, so the snippets below are illustrative.
+This guide describes the standalone Go module; snippets with placeholder package names illustrate how to embed it in your application.
+The repository does not provide Docker daemon configuration, CLI flags, or engine hook points.
 
 ## Point authoring
 
 ### Files and source of truth
 
-Create `extpoints/<area>/<name>/v0/`.
+Create `extpoints/<area>/<name>/v0/` in your own Go module.
+This layout is a convention, not a required location.
 A point has one hand-written Go contract and generated wire files:
 
 ```
@@ -95,7 +97,7 @@ The detailed rules are [DESIGN.md](./DESIGN.md#resolution-ordering-and-lifecycle
   Use `DefineSinglePoint` for a deciding point; the generated `ClientPoint` makes the host reject two executable providers.
   Built-ins yield to executable providers.
   Runtime fallback and failure behavior belongs to the point's call helper and must be stated in its contract.
-  Omit a built-in point's `ClientPoint` from `clientProviders()` to close it to replacement; a launched declaration is then rejected at client wiring.
+  Omit a built-in point's `ClientPoint` from `host.WithClientProviders` to close it to internal replacement; a launched declaration requiring that client wiring is then rejected.
 - Prefer unary `M(ctx, *Req) (*Resp, error)` methods and explicit phases such as `Update` followed by `Validate`; keep dependencies acyclic and optional when absence is valid.
 - Choose fail-open or fail-closed behavior.
   Security and veto points normally fail closed.
@@ -154,54 +156,57 @@ from the inferred service identity.
 
 ### 3. Generate and validate
 
-Run the pinned toolchain:
+Generation needs Go 1.26 or newer, but no `protoc`, plugins, or other `PATH` tools.
+In your own module, record the generator as a tool dependency before running the directive:
 
-```console
-$ make generate-extensions
+```fish
+go get -tool github.com/moby/extensions/cmd/mobyextgen
+go generate ./extpoints/<area>/<name>/v0/
+go mod tidy
+go test ./...
 ```
 
-This regenerates every contract and copies the result back into the tree.
-CI runs `make validate-generate-extensions` and fails if committed output does not match a fresh run.
-Commit generated output.
+Replace `<area>` and `<name>` with your package directory names.
+The directive uses the generator version selected by your module's dependency graph.
+The tool dependency keeps the generator's dependencies and checksums available after `go mod tidy`.
+Commit the generated output along with `go.mod` and `go.sum`.
 
-Generation needs only the Go toolchain: no `protoc`, plugins, or other `PATH` tools.
-To regenerate one point use:
+When contributing to this repository, regenerate all contracts from the repository root:
 
-```console
-$ go generate ./extpoints/<area>/<name>/v0/
+```fish
+go generate ./...
 ```
 
-To reproduce the CI scope use:
+Check that committed output matches fresh generation without rewriting the checkout:
 
-```console
-$ go generate ./extpoints/... ./internal/extensions/...
+```fish
+make lint-generate
 ```
 
-The make target pins the Go version to make validation hermetic, not because generation needs a container.
+CI runs this check as part of `make lint`, using the Go version from `go.mod` in a container.
+The direct `make lint-generate` command uses your local Go toolchain.
 
 ### 4. Call the point from an engine flow
 
 Import the contract and call its helper with the host as `extensions.Resolver`.
-The daemon's `*host.Host` satisfies that interface.
-A point with no providers resolves zero providers and is a safe no-op.
+The `*host.Host` returned by `host.New` satisfies that interface.
+`Point.All` returns an empty list when there are no providers; `Point.Single` returns an error.
+The helper must define whether absence is a safe no-op or a failure.
 Call the helper at the engine boundary where its input is complete.
 A security policy point must inspect the authoritative data used by the protected operation so an earlier or partial representation cannot bypass it.
 
 ### 5. Support separate-binary providers
 
 Steps 1–4 are sufficient for in-process providers.
-To support a launched provider, add its generated `ClientPoint` to `clientProviders()` in `daemon/extensions.go`:
+To support a launched provider, pass its generated `ClientPoint` when constructing the Host:
 
 ```go
-func clientProviders() []clientpoint.Registration {
-	return []clientpoint.Registration{
-		<name>pb.ClientPoint, // add this
-	}
-}
+host.WithClientProviders(mypointpb.ClientPoint),
 ```
 
 `ClientPoint` builds an in-process caller from the gRPC connection.
-This list is the boundary for launched providers: an unlisted declared point is rejected, while any executable extension may provide a listed point.
+This list is the wiring boundary for internal calls to launched providers: an unlisted declared point is rejected unless it is offered only for external publication.
+Use `host.WithProviderPolicy` to restrict which extensions may provide internally wired points.
 See [DESIGN.md#discovery-security](./DESIGN.md#discovery-security).
 
 An offered-only process Point does not need `ClientPoint` wiring because the Host
@@ -319,7 +324,7 @@ func (b *Bridge) Declaration() extensions.Declaration {
 ```
 
 `Init` receives the extension config and a resolver.
-Config is keyed by id in `daemon.json`; declare dependencies and conflicts in the declaration.
+The application supplies config keyed by id through `host.WithExtensionConfig`; declare dependencies and conflicts in the declaration.
 The broker initializes dependencies before dependents.
 
 ### Retain dependencies for later calls
@@ -395,44 +400,44 @@ For an out-of-process extension, wire every dependency point it will call:
 
 ```go
 srv := sdk.NewServer()
-srv.Register(ext, mypointpb.ServerPoint) // include each provided point
+if err := srv.Register(ext, mypointpb.ServerPoint); err != nil {
+	return err
+}
 srv.Depends(volumedriverpb.ClientPoint) // one per dependency point it will call
-srv.Listen(ctx)
+return srv.Listen(ctx)
 ```
 
-The host must offer the same points as dependencies by listing their generated `ServerPoint` in `dependencyProviders()` in `daemon/extensions.go`.
-A dependency on an extension-defined point works only when the daemon supports that wiring.
+The Host must offer the same points as dependencies by passing their generated `ServerPoint` to `host.WithDependencyProviders`.
+A dependency on an extension-defined point works only when the application supplies that wiring.
 Cross-process dependency lookup currently exposes one provider; `All` and by-id selection are deferred.
 
-Configure extensions under `extension-config` in `daemon.json`:
+Configure extensions when constructing the Host:
 
-```json
-{
-  "extension-config": {
-    "com.example.myext.v1": { "some_key": "value" }
-  }
-}
+```go
+host.WithExtensionConfig(map[extensions.ExtensionID]extensions.Config{
+	"com.example.myext.v1": {"some_key": "value"},
+}),
 ```
 
 The same entry reaches an in-process `Init` or a separate binary through the startup handshake.
+The application chooses how to read and validate this configuration; the framework does not read `daemon.json`.
 
 ### Run in-process
 
-Register a built-in by adding it to `builtinExtensions()` in `daemon/extensions.go`; select it from daemon config as needed:
+Register in-process extensions with `host.WithExtensions`:
 
 ```go
-func builtinExtensions(cfg *config.Config) []extensions.Extension {
-	var exts []extensions.Extension
-	if cfg.SomeFeatureEnabled {
-		exts = append(exts, somepkg.Extension)
-	}
-	return exts
+h, err := host.New(ctx,
+	host.WithExtensions(myext.Extension),
+	host.WithExtensionConfig(extensionConfig),
+)
+if err != nil {
+	return err
 }
 ```
 
 Built-ins use the same registration path as launched binaries.
-Their config is delivered by id through
-`host.WithExtensionConfig(extensionConfig)`.
+Keep `h` for point resolution and call `h.Shutdown` when the application exits, using a context that has not already been canceled.
 
 ### Run out-of-process
 
@@ -455,13 +460,31 @@ The daemon writes startup config to stdin and waits for one `ready\n` line on st
 Any other pre-readiness stdout corrupts the handshake and fails launch.
 The daemon captures stderr in its logs.
 
-Deploy the binary with the extension id as its name, in the extensions directory, which defaults to `/usr/libexec/docker/moby-extensions/`.
-`--extension-dir` overrides it; rootless mode uses the user's libexec home; on Windows use `<id>.exe`.
-The daemon discovers and launches binaries at startup.
+Deploy the binary with the extension id as its name; on Windows the name is `<id>.exe`.
+The embedding application chooses the binary directories and runtime directory:
+
+```go
+h, err := host.New(ctx,
+	host.WithDirs(extensionDir),
+	host.WithRuntimeDir(runtimeDir),
+	host.WithClientProviders(mypointpb.ClientPoint),
+	host.WithExtensionConfig(extensionConfig),
+)
+if err != nil {
+	return err
+}
+```
+
+`host.New` discovers and launches accepted binaries in the supplied directories.
+There is no default discovery directory or `--extension-dir` flag in this library.
+Use trusted binary directories and a private runtime directory writable only by the Host's user, with a short absolute path for Unix sockets.
+Create the private runtime directory before constructing the Host, and supply it whenever launching processes or exposing dependency callbacks.
+Keep the construction context alive while launched processes are in use, and call `h.Shutdown` before the application exits.
+See [discovery security](./DESIGN.md#discovery-security) before installing binaries.
 
 There is no watchdog yet.
 If the process dies, callers get gRPC errors until the daemon restarts.
-Health checks, reconnect, and restart are future work in [ROADMAP.md](./ROADMAP.md).
+See the [lifecycle limitations](./DESIGN.md#resolution-ordering-and-lifecycle).
 
 ## Author checklist
 
@@ -482,19 +505,16 @@ Health checks, reconnect, and restart are future work in [ROADMAP.md](./ROADMAP.
 
 ## Quick reference
 
-| Task | Where | What |
-|---|---|---|
-| Define a point | `extpoints/<area>/<name>/v0/<name>.go` | Go interface, `pb` messages, `DefinePoint`, helpers |
-| Name its wire service | same contract file | inferred `<PointID>.<InterfaceName>` |
-| Offer an ordinary point | extension declaration | implement it with `Point.Provide` and name it in `servicev0.Offer` |
-| Authorize an internal provider | host functional options | return `host.Allow()` from identity-aware `WithProviderPolicy`; ordinary Point IDs control admission; nil preserves registration |
-| Authorize publication | host functional options | return `host.Allow()` for `servicev0.Point.ID()` through `WithProviderPolicy`; supply `WithPointServers` for in-process offers |
-| Invoke a published point | external caller | use generated `NewClient(hostConn)` |
-| Serve an ordinary point | SDK or dependency wiring | pass its generated `ServerPoint` |
-| Wire it | `extpoints/<area>/<name>/v0/<name>.go` | package doc and identical `//go:generate` |
-| Generate | `go generate ./extpoints/<area>/<name>/v0/` | regenerate `.proto` and `protogen/` |
-| Invoke it | relevant engine flow | call the contract helper with the host resolver |
-| Support a binary | `daemon/extensions.go` → `clientProviders()` | add `<name>pb.ClientPoint` |
-| Write an extension | anywhere | `extensions.New(Declaration{…})` or `Extension` |
-| Run it built-in | `daemon/extensions.go` → `builtinExtensions()` | append the extension value |
-| Run it as a binary | `cmd/<name>/main.go` | `sdk.Main(ext, sdk.WithServerPoints(<name>pb.ServerPoint))` |
+- Define a Point with a Go interface, `pb` messages, `DefinePoint`, and call helpers in your contract package.
+- Generate its `.proto` and `protogen/` files with `go generate`; the wire service name is `<PointID>.<InterfaceName>`.
+- Implement an extension with `extensions.New(Declaration{…})` or an `Extension` implementation.
+- Register it in-process with `host.WithExtensions`, or serve it in a binary with `sdk.Main` and `sdk.WithServerPoints`.
+- Discover binaries with `host.WithDirs` and provide socket storage with `host.WithRuntimeDir`.
+- Wire internal calls to binaries with `host.WithClientProviders`.
+- Wire calls from binaries to Host providers with `host.WithDependencyProviders` and SDK `Server.Depends`.
+- Supply configuration by extension id with `host.WithExtensionConfig`.
+- Resolve Points through the Host and call their contract helpers.
+- Restrict internal providers with `host.WithProviderPolicy` using ordinary Point IDs.
+- Offer implemented Points with `servicev0.Offer`, authorize publication through policy on `servicev0.Point.ID()`, and supply `host.WithPointServers` for in-process offers.
+- Call published Points with the generated `NewClient(hostConn)`.
+- Release lifecycle resources with `Host.Shutdown`.
