@@ -343,6 +343,9 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 		if err != nil {
 			return nil, err
 		}
+		if extensionFullyDropped(decl.Providers, admittedProviders) {
+			continue
+		}
 		services, err := collectInProcessPublications(identity, ext, policy, pointServers, publishedServices, publishedOwners, reservedServices)
 		if err != nil {
 			return nil, err
@@ -378,6 +381,9 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 			admittedProviders, err := admitProviders(identity, decl.Providers, policy)
 			if err != nil {
 				return nil, err
+			}
+			if extensionFullyDropped(decl.Providers, admittedProviders) {
+				continue
 			}
 			if err := approveProcessPublications(identity, started, policy, publishedServices, publishedOwners, reservedServices); err != nil {
 				return nil, err
@@ -468,6 +474,31 @@ func admitProviders(identity extensions.ExtensionIdentity, providers []extension
 		}
 	}
 	return admitted, nil
+}
+
+// extensionFullyDropped reports whether policy dropped every non-metadata
+// provider an extension declared, leaving it nothing to be initialized or
+// resolved as. Metadata providers are always admitted and do not rescue an
+// extension from this: they are excluded on both sides of the comparison. An
+// extension declaring no non-metadata provider in the first place (including
+// one with no providers at all) is never considered dropped.
+func extensionFullyDropped(declared, admitted []extensions.Provider) bool {
+	hadProvider := false
+	for _, provider := range declared {
+		if !extensions.IsMetadataPoint(provider.Point) {
+			hadProvider = true
+			break
+		}
+	}
+	if !hadProvider {
+		return false
+	}
+	for _, provider := range admitted {
+		if !extensions.IsMetadataPoint(provider.Point) {
+			return false
+		}
+	}
+	return true
 }
 
 func approveProcessPublications(identity extensions.ExtensionIdentity, started *launcher.Launched, policy PointPolicy, published map[extensions.ExtensionID]map[extensions.PointID][]string, owners map[string]extensions.ExtensionID, reserved map[string]bool) error {

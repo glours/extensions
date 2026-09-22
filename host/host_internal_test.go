@@ -19,6 +19,7 @@ import (
 	servicev0 "github.com/moby/extensions/extpoints/service/v0"
 	"github.com/moby/extensions/internal/broker"
 	"github.com/moby/extensions/internal/launcher"
+	echov1 "github.com/moby/extensions/internal/launcher/echo/v1"
 	echopb "github.com/moby/extensions/internal/launcher/echo/v1/protogen"
 	"github.com/moby/extensions/serverpoint"
 	"google.golang.org/grpc"
@@ -344,13 +345,12 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 		assert.Equal(t, gotPoint, point)
 	})
 
-	t.Run("drop omits provider and keeps extension", func(t *testing.T) {
-		initialized := false
+	t.Run("drop of the only provider skips the extension entirely", func(t *testing.T) {
 		ext := extensions.New(extensions.Declaration{
 			ID:        id,
 			Providers: []extensions.Provider{{Point: point, Impl: "impl"}},
 			Init: func(context.Context, extensions.Config, extensions.Resolver) error {
-				initialized = true
+				t.Fatal("Init must not run for an extension fully dropped by policy")
 				return nil
 			},
 		})
@@ -363,10 +363,9 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 		)
 		assert.NilError(t, err)
 		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
-		assert.Assert(t, initialized)
 		assert.Equal(t, len(h.Providers(point)), 0)
 		_, err = h.Provider(point, id)
-		assert.ErrorContains(t, err, `does not provide point "org.example.internal.v1"`)
+		assert.ErrorContains(t, err, `extension "org.example.provider.v1" is not registered`)
 	})
 
 	t.Run("reject fails with cause and context", func(t *testing.T) {
@@ -423,6 +422,86 @@ func TestProviderAdmissionPolicy(t *testing.T) {
 			})),
 		)
 		assert.ErrorContains(t, err, "point policy returned an invalid or unspecified result")
+	})
+}
+
+// TestExtensionDroppedByPolicy verifies that an extension is skipped entirely
+// -- no Init, no resolution as a dependency provider -- only when the policy
+// drops every non-metadata provider it declares.
+func TestExtensionDroppedByPolicy(t *testing.T) {
+	t.Run("partial drop keeps the extension alive with its surviving provider", func(t *testing.T) {
+		const keptPoint = extensions.PointID("org.example.kept.v1")
+		const droppedPoint = extensions.PointID("org.example.dropped.v1")
+		const id = extensions.ExtensionID("org.example.partial.v1")
+		initialized := false
+		ext := extensions.New(extensions.Declaration{
+			ID: id,
+			Providers: []extensions.Provider{
+				{Point: keptPoint, Impl: "kept"},
+				{Point: droppedPoint, Impl: "dropped"},
+			},
+			Init: func(context.Context, extensions.Config, extensions.Resolver) error {
+				initialized = true
+				return nil
+			},
+		})
+		h, err := New(t.Context(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(ext),
+			WithProviderPolicy(PointPolicyFunc(func(_ extensions.ExtensionIdentity, point extensions.PointID) PointPolicyResult {
+				if point == keptPoint {
+					return Allow()
+				}
+				return Drop()
+			})),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
+		assert.Assert(t, initialized, "a partially dropped extension must still be initialized")
+		assert.Equal(t, len(h.Providers(keptPoint)), 1)
+		assert.Equal(t, len(h.Providers(droppedPoint)), 0)
+	})
+
+	t.Run("extension without providers is never dropped", func(t *testing.T) {
+		initialized := false
+		ext := extensions.New(extensions.Declaration{
+			ID: "org.example.noproviders.v1",
+			Init: func(context.Context, extensions.Config, extensions.Resolver) error {
+				initialized = true
+				return nil
+			},
+		})
+		h, err := New(t.Context(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(ext),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				t.Fatal("policy should not be consulted for an extension declaring no providers")
+				return Drop()
+			})),
+		)
+		assert.NilError(t, err)
+		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
+		assert.Assert(t, initialized)
+	})
+
+	t.Run("dependency on a fully dropped provider fails like a missing point", func(t *testing.T) {
+		const depPoint = extensions.PointID("org.example.dep-target.v1")
+		provider := extensions.New(extensions.Declaration{
+			ID:        "org.example.dep-provider.v1",
+			Providers: []extensions.Provider{{Point: depPoint, Impl: "impl"}},
+		})
+		consumer := extensions.New(extensions.Declaration{
+			ID:           "org.example.dep-consumer.v1",
+			Dependencies: []extensions.Dependency{{Point: depPoint}},
+		})
+		_, err := New(t.Context(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(provider, consumer),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return Drop()
+			})),
+		)
+		assert.ErrorContains(t, err, `extension "org.example.dep-consumer.v1" requires missing point "org.example.dep-target.v1"`)
 	})
 }
 
@@ -516,6 +595,29 @@ func TestProcessResourceCleanup(t *testing.T) {
 		assert.ErrorContains(t, err, `origin "executable"`)
 		assert.ErrorContains(t, err, `point "moby.extensions.internal.launcher.echo.v1"`)
 		assert.DeepEqual(t, gotIdentity, executableIdentityAtPath(lifecycleExtensionID, bin))
+		assertProcessReleased(t, probeFile)
+	})
+
+	t.Run("provider policy fully drops the extension", func(t *testing.T) {
+		// The out-of-process extension must still be launched to hand back its
+		// declaration over the handshake, so the process itself cannot be
+		// avoided (see the mission note on this limitation). What must not
+		// happen is initialization: failInit=true would fail this test if
+		// Init ran, which only a fully dropped extension avoids.
+		probeFile := filepath.Join(t.TempDir(), "probe")
+		h, err := New(ctx,
+			WithRuntimeDir(shortTempDir(t)),
+			WithDirs(dir),
+			WithClientProviders(echopb.ClientPoint),
+			WithExtensionConfig(processProbeConfig(probeFile, true)),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return Drop()
+			})),
+		)
+		assert.NilError(t, err)
+		assert.Equal(t, len(h.Providers(echov1.Point.ID())), 0)
+		assertProcessRunning(t, probeFile)
+		assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx)))
 		assertProcessReleased(t, probeFile)
 	})
 
@@ -862,7 +964,11 @@ func TestInProcessPublicationPolicy(t *testing.T) {
 		assert.Equal(t, len(h.PublishedServicesForPoint(point)), 0)
 	})
 
-	t.Run("allow publishes original provider after ordinary drop", func(t *testing.T) {
+	t.Run("dropping the only provider drops the extension entirely, publication included", func(t *testing.T) {
+		// Metadata providers are always admitted and must not rescue an
+		// extension from being fully dropped: the extension's only ordinary
+		// provider is dropped here, so publication must not happen either,
+		// even though the publication policy call itself would allow it.
 		h, err := New(t.Context(),
 			WithRuntimeDir(t.TempDir()),
 			WithExtensions(ext),
@@ -877,9 +983,7 @@ func TestInProcessPublicationPolicy(t *testing.T) {
 		assert.NilError(t, err)
 		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 		assert.Equal(t, len(h.Providers(point)), 0)
-		assert.DeepEqual(t, h.PublishedServicesForPoint(point), map[extensions.ExtensionID][]string{
-			id: {"example.API"},
-		})
+		assert.DeepEqual(t, h.PublishedServicesForPoint(point), map[extensions.ExtensionID][]string{})
 	})
 
 	t.Run("reject fails with cause", func(t *testing.T) {
