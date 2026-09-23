@@ -484,6 +484,35 @@ func TestExtensionDroppedByPolicy(t *testing.T) {
 		assert.Assert(t, initialized)
 	})
 
+	t.Run("dropped provider still has to be valid", func(t *testing.T) {
+		_, err := New(t.Context(),
+			WithExtensions(extensions.New(extensions.Declaration{
+				ID:        "org.example.invalid.v1",
+				Providers: []extensions.Provider{{Point: "org.example.point.v1"}},
+			})),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return Drop()
+			})),
+		)
+		assert.ErrorContains(t, err, `extension "org.example.invalid.v1" provider for point "org.example.point.v1" is nil`)
+	})
+
+	t.Run("dropped extension still validates offer metadata", func(t *testing.T) {
+		_, err := New(t.Context(),
+			WithExtensions(extensions.New(extensions.Declaration{
+				ID: "org.example.invalid-offer.v1",
+				Providers: []extensions.Provider{
+					{Point: "org.example.point.v1", Impl: "impl"},
+					{Point: servicev0.Point.ID(), Impl: "invalid metadata"},
+				},
+			})),
+			WithProviderPolicy(PointPolicyFunc(func(extensions.ExtensionIdentity, extensions.PointID) PointPolicyResult {
+				return Drop()
+			})),
+		)
+		assert.ErrorContains(t, err, `point "org.mobyproject.extension.service.v0" has incompatible offer metadata`)
+	})
+
 	t.Run("dependency on a fully dropped provider fails like a missing point", func(t *testing.T) {
 		const depPoint = extensions.PointID("org.example.dep-target.v1")
 		provider := extensions.New(extensions.Declaration{
@@ -599,11 +628,8 @@ func TestProcessResourceCleanup(t *testing.T) {
 	})
 
 	t.Run("provider policy fully drops the extension", func(t *testing.T) {
-		// The out-of-process extension must still be launched to hand back its
-		// declaration over the handshake, so the process itself cannot be
-		// avoided (see the mission note on this limitation). What must not
-		// happen is initialization: failInit=true would fail this test if
-		// Init ran, which only a fully dropped extension avoids.
+		// The handshake must run to obtain the declaration, but a dropped
+		// process must exit without receiving Initialize.
 		probeFile := filepath.Join(t.TempDir(), "probe")
 		h, err := New(ctx,
 			WithRuntimeDir(shortTempDir(t)),
@@ -616,9 +642,8 @@ func TestProcessResourceCleanup(t *testing.T) {
 		)
 		assert.NilError(t, err)
 		assert.Equal(t, len(h.Providers(echov1.Point.ID())), 0)
-		assertProcessRunning(t, probeFile)
-		assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx)))
 		assertProcessReleased(t, probeFile)
+		assert.NilError(t, h.Shutdown(context.WithoutCancel(ctx)))
 	})
 
 	t.Run("adaptation error", func(t *testing.T) {
@@ -984,6 +1009,21 @@ func TestInProcessPublicationPolicy(t *testing.T) {
 		defer func() { assert.NilError(t, h.Shutdown(context.WithoutCancel(t.Context()))) }()
 		assert.Equal(t, len(h.Providers(point)), 0)
 		assert.DeepEqual(t, h.PublishedServicesForPoint(point), map[extensions.ExtensionID][]string{})
+	})
+
+	t.Run("rejecting publication still fails when the provider is dropped", func(t *testing.T) {
+		cause := errors.New("publication denied")
+		_, err := New(t.Context(),
+			WithRuntimeDir(t.TempDir()),
+			WithExtensions(ext),
+			WithProviderPolicy(PointPolicyFunc(func(_ extensions.ExtensionIdentity, policyPoint extensions.PointID) PointPolicyResult {
+				if policyPoint == servicev0.Point.ID() {
+					return Reject(cause)
+				}
+				return Drop()
+			})),
+		)
+		assert.Assert(t, errors.Is(err, cause))
 	})
 
 	t.Run("reject fails with cause", func(t *testing.T) {
