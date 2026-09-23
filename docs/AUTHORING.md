@@ -255,7 +255,7 @@ host-attested identity. Internal provider admission uses the same policy with
 ordinary Point IDs and different nil behavior: a nil policy preserves all
 internally wired providers while dropping publication, while a non-nil policy
 can allow, drop, or reject each use by identity and Point.
-`Drop` omits an ordinary provider and its offer; if every ordinary provider is dropped, the Host skips the extension instead of initializing it.
+`Drop` omits an ordinary provider and its offer; if every ordinary provider is dropped, the Host skips the extension instead of initializing it, unless it publishes Points offered without `ClientPoint` wiring.
 `Reject` fails Host construction and preserves its error cause.
 A zero result and a typed nil
 `PointPolicyFunc` reject the request. Offered-only process Points without

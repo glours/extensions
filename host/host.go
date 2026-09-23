@@ -411,21 +411,18 @@ func New(ctx context.Context, optionList ...Option) (_ *Host, retErr error) {
 			if err := broker.ValidateDeclaration(decl); err != nil {
 				return nil, err
 			}
-			if extensionFullyDropped(decl.Providers, admittedProviders) {
+			if err := approveProcessPublications(identity, started, &publication, droppedProviderPoints(decl.Providers, admittedProviders)); err != nil {
+				return nil, err
+			}
+			// Offered-only points have no provider for policy to drop, so they keep
+			// the process only when their offer is published.
+			if extensionFullyDropped(decl.Providers, admittedProviders) && len(publication.published[identity.ID]) == 0 {
 				// The process was launched for Describe; stop it before returning the host.
-				if len(started.OfferedPoints) > 0 {
-					if _, err := publicationPolicyAction(identity, policy); err != nil {
-						return nil, err
-					}
-				}
 				if err := started.Close(context.WithoutCancel(ctx)); err != nil {
 					return nil, fmt.Errorf("close dropped extension %q: %w", identity.ID, err)
 				}
 				loaded = loaded[:len(loaded)-1]
 				continue
-			}
-			if err := approveProcessPublications(identity, started, &publication, droppedProviderPoints(decl.Providers, admittedProviders)); err != nil {
-				return nil, err
 			}
 			decl.Providers = admittedProviders
 			if err := b.Register(identity, extensions.New(decl)); err != nil {
