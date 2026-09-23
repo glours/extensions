@@ -204,13 +204,15 @@ To support a launched provider, pass its generated `ClientPoint` when constructi
 host.WithClientProviders(mypointpb.ClientPoint),
 ```
 
-`ClientPoint` builds an in-process caller from the gRPC connection.
+`ClientPoint` builds a typed in-process caller from the gRPC connection, so daemon code calls a launched provider like a built-in one.
+Wire it only for Points the daemon itself calls.
 This list is the wiring boundary for internal calls to launched providers: an unlisted declared point is rejected unless it is offered only for external publication.
 Use `host.WithProviderPolicy` to restrict which extensions may provide internally wired points.
 See [DESIGN.md#discovery-security](./DESIGN.md#discovery-security).
 
-An offered-only process Point does not need `ClientPoint` wiring because the Host
-proxies its generated service without constructing an internal caller.
+A Point that only external callers use does not need `ClientPoint` wiring.
+Offer it for publication instead: the proxy forwards calls to the extension by gRPC service name without decoding them.
+For example, a naming Point that the daemon calls needs `ClientPoint`, while a job API that only external tools call needs only an offer.
 
 ### Publishing an ordinary Point
 
@@ -250,17 +252,22 @@ _, err := host.New(ctx, host.WithProviderPolicy(host.PointPolicyFunc(func(identi
 })))
 ```
 
-Publication authorization uses `servicev0.Point.ID()` and receives the
-host-attested identity. Internal provider admission uses the same policy with
-ordinary Point IDs and different nil behavior: a nil policy preserves all
-internally wired providers while dropping publication, while a non-nil policy
-can allow, drop, or reject each use by identity and Point.
-`Drop` omits an ordinary provider and its offer; if every ordinary provider is dropped, the Host skips the extension instead of initializing it, unless it publishes Points offered without `ClientPoint` wiring.
-`Reject` fails Host construction and preserves its error cause.
-A zero result and a typed nil
-`PointPolicyFunc` reject the request. Offered-only process Points without
-`ClientPoint` wiring consult the policy only with `servicev0.Point.ID()`.
-The `servicev0` offer marker itself is exempt from provider admission and governs publication of eligible offered Points.
+Publication authorization uses `servicev0.Point.ID()` and receives the host-attested identity.
+Internal provider admission uses the same policy with ordinary Point IDs.
+A nil policy allows every internally wired provider and drops all publication.
+A non-nil policy decides each use by identity and Point:
+
+- `Allow` admits the provider or publication.
+- `Drop` omits an ordinary provider and its offer.
+- `Reject` fails Host construction and preserves its error cause.
+
+A zero result and a typed nil `PointPolicyFunc` reject the request.
+The `servicev0` offer marker itself is exempt from provider admission.
+Offered-only process Points have no internal provider, so the policy sees them only through `servicev0.Point.ID()`.
+
+If policy drops every ordinary provider of an extension, the Host skips the extension instead of initializing it.
+A launched extension stays loaded while it publishes an offered-only Point, because external callers still reach that Point through the proxy.
+For example, when policy drops the naming Point an extension provides to the daemon but allows publication, the extension keeps serving its offered-only job API.
 
 For an in-process extension, supply generated adapters at Host composition:
 
